@@ -192,6 +192,41 @@ app.put("/admin/user/:id", async (req, res) => {
     });
 });
 
+/* ---------------- UPDATE USER ASSETS (ADMIN CONTROL) ---------------- */
+app.put("/admin/user-assets/:id", async (req, res) => {
+
+    const userId = req.params.id;
+
+    const {
+        btc_balance,
+        eth_balance,
+        usdt_balance
+    } = req.body;
+
+    const { data, error } = await supabase
+        .from("users")
+        .update({
+            btc_balance,
+            eth_balance,
+            usdt_balance
+        })
+        .eq("id", userId)
+        .select();
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        message: "Assets updated successfully",
+        user: data
+    });
+});
+
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

@@ -140,6 +140,7 @@ app.post("/login", async (req, res) => {
     });
 });
 
+/* ---------------- ADMIN STATS ---------------- */
 app.get("/admin/stats", async (req, res) => {
 
     const { count: totalUsers } = await supabase
@@ -153,6 +154,42 @@ app.get("/admin/stats", async (req, res) => {
         withdrawals: 0
     });
 
+});
+
+
+/* ---------------- UPDATE USER (ADMIN CONTROL) ---------------- */
+app.put("/admin/user/:id", async (req, res) => {
+
+    const userId = req.params.id;
+
+    const {
+        balance,
+        active_asset,
+        total_trades
+    } = req.body;
+
+    const { data, error } = await supabase
+        .from("users")
+        .update({
+            balance,
+            active_asset,
+            total_trades
+        })
+        .eq("id", userId)
+        .select();
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        message: "User updated successfully",
+        user: data
+    });
 });
 
 /* ---------------- START SERVER ---------------- */

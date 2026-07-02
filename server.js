@@ -139,6 +139,22 @@ app.post("/login", async (req, res) => {
         user: data
     });
 });
+
+app.get("/admin/stats", async (req, res) => {
+
+    const { count: totalUsers } = await supabase
+        .from("users")
+        .select("*", { count: "exact", head: true });
+
+    res.json({
+        totalUsers: totalUsers || 0,
+        totalBalance: 0,
+        deposits: 0,
+        withdrawals: 0
+    });
+
+});
+
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

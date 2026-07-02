@@ -107,6 +107,38 @@ app.post("/signup", async (req, res) => {
         user: data
     });
 });
+
+/* ---------------- LOGIN ROUTE ---------------- */
+app.post("/login", async (req, res) => {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+        return res.status(400).json({
+            success: false,
+            message: "Email and password are required."
+        });
+    }
+
+    const { data, error } = await supabase
+        .from("users")
+        .select("*")
+        .eq("email", email)
+        .eq("password", password)
+        .single();
+
+    if (error || !data) {
+        return res.status(401).json({
+            success: false,
+            message: "Invalid email or password."
+        });
+    }
+
+    res.json({
+        success: true,
+        message: "Login successful.",
+        user: data
+    });
+});
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

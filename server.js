@@ -157,6 +157,28 @@ app.get("/admin/stats", async (req, res) => {
 
 });
 
+/* ---------------- GET SINGLE USER ---------------- */
+app.get("/admin/user/:id", async (req, res) => {
+
+    const { data, error } = await supabase
+        .from("users")
+        .select("*")
+        .eq("id", req.params.id)
+        .single();
+
+    if (error) {
+        return res.status(404).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        user: data
+    });
+
+});
 
 /* ---------------- UPDATE USER (ADMIN CONTROL) ---------------- */
 app.put("/admin/user/:id", async (req, res) => {

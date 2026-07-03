@@ -283,6 +283,60 @@ app.get("/admin/users", async (req, res) => {
 
 });
 
+/* ---------------- CHANGE PASSWORD ---------------- */
+app.put("/change-password/:id", async (req, res) => {
+
+    const userId = req.params.id;
+    const { old_password, new_password } = req.body;
+
+    if (!old_password || !new_password) {
+        return res.status(400).json({
+            success: false,
+            message: "All fields are required"
+        });
+    }
+
+    // get user
+    const { data: user, error } = await supabase
+        .from("users")
+        .select("*")
+        .eq("id", userId)
+        .single();
+
+    if (error || !user) {
+        return res.status(404).json({
+            success: false,
+            message: "User not found"
+        });
+    }
+
+    // check old password
+    if (user.password !== old_password) {
+        return res.status(401).json({
+            success: false,
+            message: "Old password is incorrect"
+        });
+    }
+
+    // update password
+    const { error: updateError } = await supabase
+        .from("users")
+        .update({ password: new_password })
+        .eq("id", userId);
+
+    if (updateError) {
+        return res.status(500).json({
+            success: false,
+            message: updateError.message
+        });
+    }
+
+    res.json({
+        success: true,
+        message: "Password updated successfully"
+    });
+});
+
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

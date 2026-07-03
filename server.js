@@ -236,10 +236,11 @@ app.put("/admin/user-assets/:id", async (req, res) => {
 app.get("/admin/users", async (req, res) => {
 
     const { data, error } = await supabase
-        .from("users")
-        .select("*")
-        .order("id", { ascending: false });
-
+    .from("users")
+    .select("*")
+    .eq("is_admin", false)
+    .order("id", { ascending: false });
+    
     if (error) {
         return res.status(500).json({
             success: false,

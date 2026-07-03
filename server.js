@@ -185,11 +185,14 @@ app.put("/admin/user/:id", async (req, res) => {
 
     const userId = req.params.id;
 
-    const {
+   const {
     balance,
     total_trade,
     assets,
     active_assets,
+    btc_balance,
+    eth_balance,
+    usdt_balance,
     is_suspended
 } = req.body;
 

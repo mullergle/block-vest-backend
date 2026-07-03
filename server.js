@@ -232,6 +232,28 @@ app.put("/admin/user-assets/:id", async (req, res) => {
     });
 });
 
+/* ---------------- GET ALL USERS (ADMIN) ---------------- */
+app.get("/admin/users", async (req, res) => {
+
+    const { data, error } = await supabase
+        .from("users")
+        .select("*")
+        .order("id", { ascending: false });
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        users: data
+    });
+
+});
+
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

@@ -136,6 +136,7 @@ app.post("/login", async (req, res) => {
     res.json({
         success: true,
         message: "Login successful.",
+        is_admin: data.is_admin,
         user: data
     });
 });

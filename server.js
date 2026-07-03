@@ -132,7 +132,7 @@ app.post("/login", async (req, res) => {
             message: "Invalid email or password."
         });
     }
-
+    console.log(data);
     res.json({
         success: true,
         message: "Login successful.",

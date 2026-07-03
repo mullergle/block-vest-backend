@@ -164,18 +164,22 @@ app.put("/admin/user/:id", async (req, res) => {
     const userId = req.params.id;
 
     const {
-        balance,
-        active_asset,
-        total_trades
-    } = req.body;
+    balance,
+    total_trade,
+    assets,
+    active_assets,
+    is_suspended
+} = req.body;
 
     const { data, error } = await supabase
         .from("users")
         .update({
-            balance,
-            active_asset,
-            total_trades
-        })
+    balance,
+    total_trade,
+    assets,
+    active_assets,
+    is_suspended
+})
         .eq("id", userId)
         .select();
 

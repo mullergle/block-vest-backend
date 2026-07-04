@@ -154,6 +154,37 @@ app.post("/login", async (req, res) => {
     });
 });
 
+app.post("/forgot-password", async (req, res) => {
+
+    const { email } = req.body;
+
+    if (!email) {
+        return res.status(400).json({
+            success: false,
+            message: "Please enter your email address."
+        });
+    }
+
+    const { data, error } = await supabase
+        .from("users")
+        .select("id,email")
+        .eq("email", email)
+        .single();
+
+    if (error || !data) {
+        return res.json({
+            success: false,
+            message: "No account was found with that email address."
+        });
+    }
+
+    return res.json({
+        success: true,
+        message: "Email verified successfully. You can now reset your password."
+    });
+
+});
+
 /* ---------------- ADMIN STATS ---------------- */
 app.get("/admin/stats", async (req, res) => {
 

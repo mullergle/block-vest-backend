@@ -1,8 +1,11 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
+const { Resend } = require("resend");
 
 const supabase = require("./supabase");
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const app = express();
 const PORT = process.env.PORT || 3000;

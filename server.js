@@ -173,24 +173,37 @@ app.get("/admin/stats", async (req, res) => {
 /* ---------------- GET SINGLE USER ---------------- */
 app.get("/admin/user/:id", async (req, res) => {
 
+    const userId = req.params.id;
+
     const { data, error } = await supabase
         .from("users")
-        .select("*")
-        .eq("id", req.params.id)
+        .select(`
+            id,
+            full_name,
+            email,
+            balance,
+            total_trade,
+            assets,
+            active_assets,
+            btc_balance,
+            eth_balance,
+            usdt_balance,
+            is_suspended
+        `)
+        .eq("id", userId)
         .single();
 
-    if (error) {
+    if (error || !data) {
         return res.status(404).json({
             success: false,
-            message: error.message
+            message: "User not found"
         });
     }
 
-    res.json({
+    return res.json({
         success: true,
         user: data
     });
-
 });
 
 /* ---------------- UPDATE USER (ADMIN CONTROL) ---------------- */

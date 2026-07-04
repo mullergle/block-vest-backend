@@ -132,7 +132,9 @@ app.post("/login", async (req, res) => {
             message: "Invalid email or password."
         });
     }
-    console.log(data);
+    console.log("Total Trade:", data.total_trade);
+console.log("Active Trade:", data.active_trade);
+console.log(data);
     res.json({
         success: true,
         message: "Login successful.",

@@ -126,15 +126,26 @@ app.post("/login", async (req, res) => {
         .eq("password", password)
         .single();
 
+    // Wrong email or password
     if (error || !data) {
         return res.status(401).json({
             success: false,
             message: "Invalid email or password."
         });
     }
+
+    // 🚫 Block suspended accounts
+    if (data.is_suspended) {
+        return res.status(403).json({
+            success: false,
+            message: "Your account has been suspended. Please contact support."
+        });
+    }
+
     console.log("Total Trade:", data.total_trade);
-console.log("Active Trade:", data.active_assets);
-console.log(data);
+    console.log("Active Trade:", data.active_assets);
+    console.log(data);
+
     res.json({
         success: true,
         message: "Login successful.",

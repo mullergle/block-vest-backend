@@ -197,7 +197,7 @@ app.put("/admin/user/:id", async (req, res) => {
     usdt_balance,
     is_suspended
 } = req.body;
-
+console.log("BTC received:", btc_balance);
     const { data, error } = await supabase
         .from("users")
        .update({

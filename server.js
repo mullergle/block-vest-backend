@@ -10,6 +10,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 // Temporary storage for verification codes
 const verificationCodes = {};
+const verifiedEmails = {};
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -243,16 +244,26 @@ app.post("/verify-code", (req, res) => {
 
     delete verificationCodes[email];
 
-    res.json({
-        success: true,
-        message: "Verification successful."
-    });
+// Remember that this email has been verified
+verifiedEmails[email] = true;
+
+res.json({
+    success: true,
+    message: "Verification successful."
+});
 
 });
 /* ---------------- RESET PASSWORD ---------------- */
 app.post("/reset-password", async (req, res) => {
 
     const { email, password } = req.body;
+    
+    if (!verifiedEmails[email]) {
+    return res.status(403).json({
+        success: false,
+        message: "Please verify your email first."
+    });
+}
 
     if (!email || !password) {
         return res.status(400).json({
@@ -288,10 +299,13 @@ app.post("/reset-password", async (req, res) => {
         });
     }
 
-    res.json({
-        success: true,
-        message: "Password reset successfully."
-    });
+    // Remove verification after password reset
+delete verifiedEmails[email];
+
+res.json({
+    success: true,
+    message: "Password reset successfully."
+});
 
 });
 

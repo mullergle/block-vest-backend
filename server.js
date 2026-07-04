@@ -11,6 +11,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 // Temporary storage for verification codes
 const verificationCodes = {};
 const verifiedEmails = {};
+const CODE_EXPIRY = 10 * 60 * 1000; // 10 minutes
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -190,7 +191,10 @@ app.post("/forgot-password", async (req, res) => {
     const code = crypto.randomInt(100000, 999999).toString();
 
     // Save code temporarily
-    verificationCodes[email] = code;
+    verificationCodes[email] = {
+    code: code,
+    expires: Date.now() + CODE_EXPIRY
+};
 
     try {
 
@@ -235,17 +239,37 @@ app.post("/verify-code", (req, res) => {
         });
     }
 
-    if (verificationCodes[email] !== code) {
-        return res.status(401).json({
-            success: false,
-            message: "Invalid verification code."
-        });
-    }
+    const savedCode = verificationCodes[email];
 
+if (!savedCode) {
+    return res.status(401).json({
+        success: false,
+        message: "No verification code found."
+    });
+}
+
+if (Date.now() > savedCode.expires) {
     delete verificationCodes[email];
 
-// Remember that this email has been verified
+    return res.status(401).json({
+        success: false,
+        message: "Verification code has expired. Please request a new one."
+    });
+}
+
+if (savedCode.code !== code) {
+    return res.status(401).json({
+        success: false,
+        message: "Invalid verification code."
+    });
+}
+    delete verificationCodes[email];
+
+// Mark this email as verified
 verifiedEmails[email] = true;
+
+// Remove the verification code so it can't be used again
+delete verificationCodes[email];
 
 res.json({
     success: true,

@@ -222,7 +222,33 @@ app.post("/forgot-password", async (req, res) => {
     }
 
 });
+/* ---------------- VERIFY CODE ---------------- */
+app.post("/verify-code", (req, res) => {
 
+    const { email, code } = req.body;
+
+    if (!email || !code) {
+        return res.status(400).json({
+            success: false,
+            message: "Email and verification code are required."
+        });
+    }
+
+    if (verificationCodes[email] !== code) {
+        return res.status(401).json({
+            success: false,
+            message: "Invalid verification code."
+        });
+    }
+
+    delete verificationCodes[email];
+
+    res.json({
+        success: true,
+        message: "Verification successful."
+    });
+
+});
 /* ---------------- ADMIN STATS ---------------- */
 app.get("/admin/stats", async (req, res) => {
 

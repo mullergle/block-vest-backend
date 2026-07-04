@@ -249,6 +249,52 @@ app.post("/verify-code", (req, res) => {
     });
 
 });
+/* ---------------- RESET PASSWORD ---------------- */
+app.post("/reset-password", async (req, res) => {
+
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+        return res.status(400).json({
+            success: false,
+            message: "Email and password are required."
+        });
+    }
+
+    const { data: user, error } = await supabase
+        .from("users")
+        .select("id")
+        .eq("email", email)
+        .single();
+
+    if (error || !user) {
+        return res.status(404).json({
+            success: false,
+            message: "User not found."
+        });
+    }
+
+    const { error: updateError } = await supabase
+        .from("users")
+        .update({
+            password: password
+        })
+        .eq("email", email);
+
+    if (updateError) {
+        return res.status(500).json({
+            success: false,
+            message: updateError.message
+        });
+    }
+
+    res.json({
+        success: true,
+        message: "Password reset successfully."
+    });
+
+});
+
 /* ---------------- ADMIN STATS ---------------- */
 app.get("/admin/stats", async (req, res) => {
 

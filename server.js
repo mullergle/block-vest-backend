@@ -2,10 +2,14 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { Resend } = require("resend");
+const crypto = require("crypto");
 
 const supabase = require("./supabase");
 
 const resend = new Resend(process.env.RESEND_API_KEY);
+
+// Temporary storage for verification codes
+const verificationCodes = {};
 
 const app = express();
 const PORT = process.env.PORT || 3000;

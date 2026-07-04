@@ -172,23 +172,54 @@ app.post("/forgot-password", async (req, res) => {
         });
     }
 
-    const { data, error } = await supabase
+    const { data: user, error } = await supabase
         .from("users")
         .select("id,email")
         .eq("email", email)
         .single();
 
-    if (error || !data) {
+    if (error || !user) {
         return res.json({
             success: false,
             message: "No account was found with that email address."
         });
     }
 
-    return res.json({
-        success: true,
-        message: "Email verified successfully. You can now reset your password."
-    });
+    // Generate 6-digit code
+    const code = crypto.randomInt(100000, 999999).toString();
+
+    // Save code temporarily
+    verificationCodes[email] = code;
+
+    try {
+
+        await resend.emails.send({
+            from: "Block Vest <onboarding@resend.dev>",
+            to: email,
+            subject: "Block Vest Password Reset Code",
+            html: `
+                <h2>Block Vest Verification</h2>
+                <p>Your verification code is:</p>
+                <h1>${code}</h1>
+                <p>This code expires soon. If you didn't request this, ignore this email.</p>
+            `
+        });
+
+        res.json({
+            success: true,
+            message: "Verification code sent successfully."
+        });
+
+    } catch (err) {
+
+        console.log(err);
+
+        res.status(500).json({
+            success: false,
+            message: "Unable to send verification code."
+        });
+
+    }
 
 });
 

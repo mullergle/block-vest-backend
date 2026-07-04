@@ -133,7 +133,7 @@ app.post("/login", async (req, res) => {
         });
     }
     console.log("Total Trade:", data.total_trade);
-console.log("Active Trade:", data.active_trade);
+console.log("Active Trade:", data.active_assets);
 console.log(data);
     res.json({
         success: true,

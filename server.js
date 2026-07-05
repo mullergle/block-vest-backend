@@ -541,7 +541,42 @@ app.put("/change-password/:id", async (req, res) => {
         message: "Password updated successfully"
     });
 });
+/* ---------------- CREATE DEPOSIT ---------------- */
+app.post("/deposit", async (req, res) => {
 
+    const { user_id, amount, receipt_url } = req.body;
+
+    if (!user_id || !amount || !receipt_url) {
+        return res.status(400).json({
+            success: false,
+            message: "All fields are required."
+        });
+    }
+
+    const { data, error } = await supabase
+        .from("deposits")
+        .insert([{
+            user_id,
+            amount,
+            receipt_url,
+            status: "Pending"
+        }])
+        .select();
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        message: "Deposit submitted successfully.",
+        deposit: data
+    });
+
+});
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

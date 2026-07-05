@@ -588,6 +588,31 @@ res.json({
 });
 
 });
+
+/* ---------------- USER TRANSACTION HISTORY ---------------- */
+app.get("/transactions/:userId", async (req, res) => {
+
+    const userId = req.params.userId;
+
+    const { data, error } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false });
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        transactions: data
+    });
+
+});
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

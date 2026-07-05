@@ -497,6 +497,29 @@ app.get("/admin/stats", async (req, res) => {
 
 });
 
+/* ---------------- UNREAD WITHDRAWALS ---------------- */
+
+app.get("/admin/unread-withdrawals", async (req, res) => {
+
+    const { count, error } = await supabase
+        .from("withdrawals")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "Pending");
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        count: count || 0
+    });
+
+});
+
 /* ---------------- GET SINGLE USER ---------------- */
 app.get("/admin/user/:id", async (req, res) => {
 

@@ -163,6 +163,8 @@ app.post("/login", async (req, res) => {
     });
 });
 
+/* ---------------- FORGET CODE ---------------- */
+
 app.post("/forgot-password", async (req, res) => {
 
     const { email } = req.body;
@@ -227,6 +229,65 @@ app.post("/forgot-password", async (req, res) => {
     }
 
 });
+
+/* ---------------- SEND WITHDRAWAL VERIFICATION CODE ---------------- */
+
+app.post("/withdraw/send-code", async (req, res) => {
+
+    const { email } = req.body;
+
+    if (!email) {
+        return res.status(400).json({
+            success: false,
+            message: "Email is required."
+        });
+    }
+
+    // Generate 6-digit code
+    const code = crypto.randomInt(100000, 999999).toString();
+
+    // Save temporarily
+    verificationCodes[email] = {
+        code,
+        expires: Date.now() + CODE_EXPIRY
+    };
+
+    try {
+
+        await resend.emails.send({
+            from: "Block Vest <onboarding@resend.dev>",
+            to: email,
+            subject: "Block Vest Withdrawal Verification",
+            html: `
+                <h2>Withdrawal Verification</h2>
+
+                <p>Your withdrawal verification code is:</p>
+
+                <h1>${code}</h1>
+
+                <p>This code expires in 10 minutes.</p>
+            `
+        });
+
+        res.json({
+            success: true,
+            message: "Verification code sent successfully."
+        });
+
+    } catch (err) {
+
+        console.log(err);
+
+        res.status(500).json({
+            success: false,
+            message: "Unable to send verification code."
+        });
+
+    }
+
+});
+
+
 /* ---------------- VERIFY CODE ---------------- */
 app.post("/verify-code", (req, res) => {
 

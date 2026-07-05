@@ -554,27 +554,38 @@ app.post("/deposit", async (req, res) => {
     }
 
     const { data, error } = await supabase
-        .from("deposits")
-        .insert([{
-            user_id,
-            amount,
-            receipt_url,
-            status: "Pending"
-        }])
-        .select();
+    .from("deposits")
+    .insert([{
+        user_id,
+        amount,
+        receipt_url,
+        status: "Pending"
+    }])
+    .select();
 
-    if (error) {
-        return res.status(500).json({
-            success: false,
-            message: error.message
-        });
-    }
-
-    res.json({
-        success: true,
-        message: "Deposit submitted successfully.",
-        deposit: data
+if (error) {
+    return res.status(500).json({
+        success: false,
+        message: error.message
     });
+}
+
+// Save to transaction history
+await supabase
+    .from("transactions")
+    .insert([{
+        user_id,
+        type: "Deposit",
+        amount,
+        status: "Pending",
+        description: "Bitcoin Deposit"
+    }]);
+
+res.json({
+    success: true,
+    message: "Deposit submitted successfully.",
+    deposit: data
+});
 
 });
 /* ---------------- START SERVER ---------------- */

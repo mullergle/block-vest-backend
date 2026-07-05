@@ -287,6 +287,93 @@ app.post("/withdraw/send-code", async (req, res) => {
 
 });
 
+/* ---------------- CREATE WITHDRAWAL ---------------- */
+
+app.post("/withdraw/create", async (req, res) => {
+
+    const {
+        user_id,
+        email,
+        code,
+        method,
+        wallet_address,
+        amount
+    } = req.body;
+
+    // Check required fields
+    if (!user_id || !email || !code || !method || !wallet_address || !amount) {
+        return res.status(400).json({
+            success: false,
+            message: "All fields are required."
+        });
+    }
+
+    // Check verification code
+    const savedCode = verificationCodes[email];
+
+    if (!savedCode) {
+        return res.status(401).json({
+            success: false,
+            message: "Verification code not found."
+        });
+    }
+
+    if (Date.now() > savedCode.expires) {
+        delete verificationCodes[email];
+
+        return res.status(401).json({
+            success: false,
+            message: "Verification code has expired."
+        });
+    }
+
+    if (savedCode.code !== code) {
+        return res.status(401).json({
+            success: false,
+            message: "Invalid verification code."
+        });
+    }
+
+    // Remove the code after successful verification
+    delete verificationCodes[email];
+
+    // Save withdrawal
+    const { data, error } = await supabase
+        .from("withdrawals")
+        .insert([{
+            user_id,
+            method,
+            wallet_address,
+            amount,
+            status: "Pending"
+        }])
+        .select();
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    // Save transaction history
+    await supabase
+        .from("transactions")
+        .insert([{
+            user_id,
+            type: "Withdrawal",
+            amount,
+            status: "Pending",
+            description: "Bitcoin Withdrawal"
+        }]);
+
+    res.json({
+        success: true,
+        message: "Withdrawal request submitted successfully.",
+        withdrawal: data
+    });
+
+});
 
 /* ---------------- VERIFY CODE ---------------- */
 app.post("/verify-code", (req, res) => {

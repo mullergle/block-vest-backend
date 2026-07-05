@@ -497,6 +497,35 @@ app.get("/admin/stats", async (req, res) => {
 
 });
 
+/* ---------------- ADMIN GET ALL WITHDRAWALS ---------------- */
+
+app.get("/admin/withdrawals", async (req, res) => {
+
+    const { data, error } = await supabase
+        .from("withdrawals")
+        .select(`
+            *,
+            users (
+                full_name,
+                email
+            )
+        `)
+        .order("created_at", { ascending: false });
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        withdrawals: data
+    });
+
+});
+
 /* ---------------- UNREAD WITHDRAWALS ---------------- */
 
 app.get("/admin/unread-withdrawals", async (req, res) => {

@@ -931,6 +931,53 @@ app.put("/admin/withdrawals/:id/reject", async (req, res) => {
 
 });
 
+/* ---------------- DELETE  WITHDRAWAL MESSAGE ---------------- */
+
+app.delete("/admin/withdrawals/:id", async (req, res) => {
+
+    const withdrawalId = req.params.id;
+
+    // check if withdrawal exists
+    const { data: withdrawal, error } = await supabase
+        .from("withdrawals")
+        .select("*")
+        .eq("id", withdrawalId)
+        .single();
+
+    if (error || !withdrawal) {
+        return res.status(404).json({
+            success: false,
+            message: "Withdrawal not found."
+        });
+    }
+
+    // delete withdrawal
+    const { error: deleteError } = await supabase
+        .from("withdrawals")
+        .delete()
+        .eq("id", withdrawalId);
+
+    if (deleteError) {
+        return res.status(500).json({
+            success: false,
+            message: deleteError.message
+        });
+    }
+
+    // optional: delete related transaction too
+    await supabase
+        .from("transactions")
+        .delete()
+        .eq("user_id", withdrawal.user_id)
+        .eq("type", "Withdrawal");
+
+    res.json({
+        success: true,
+        message: "Withdrawal deleted successfully."
+    });
+
+});
+
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

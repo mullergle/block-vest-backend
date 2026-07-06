@@ -1080,18 +1080,22 @@ app.put("/admin/deposits/:id/approve", async (req, res) => {
 
     const { data: user } = await supabase
         .from("users")
-        .select("balance")
+        .select("balance, assets")
         .eq("id", deposit.user_id)
         .single();
 
     const newBalance =
         Number(user.balance) + Number(deposit.amount);
 
+    const newAssets =
+        Number(user.assets) + Number(deposit.amount);
+    
     await supabase
         .from("users")
         .update({
-            balance: newBalance
-        })
+         balance: newBalance,
+         assets: newAssets
+})
         .eq("id", deposit.user_id);
 
     await supabase

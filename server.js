@@ -167,6 +167,31 @@ app.post("/login", async (req, res) => {
     });
 });
 
+/* ---------------- GET USER ---------------- */
+
+app.get("/user/:id", async (req, res) => {
+
+    const { data, error } = await supabase
+        .from("users")
+        .select("*")
+        .eq("id", req.params.id)
+        .single();
+
+    if (error || !data) {
+        return res.status(404).json({
+            success: false,
+            message: "User not found."
+        });
+    }
+
+    res.json({
+        success: true,
+        user: data
+    });
+
+});
+
+
 /* ---------------- FORGET CODE ---------------- */
 
 app.post("/forgot-password", async (req, res) => {

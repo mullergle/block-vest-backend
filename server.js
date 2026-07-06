@@ -813,6 +813,112 @@ app.get("/transactions/:userId", async (req, res) => {
     });
 
 });
+
+/* ---------------- APPROVE WITHDRAWAL ---------------- */
+
+app.put("/admin/withdrawals/:id/approve", async (req, res) => {
+
+    const withdrawalId = req.params.id;
+
+    // Get withdrawal
+    const { data: withdrawal, error } = await supabase
+        .from("withdrawals")
+        .select("*")
+        .eq("id", withdrawalId)
+        .single();
+
+    if (error || !withdrawal) {
+        return res.status(404).json({
+            success: false,
+            message: "Withdrawal not found."
+        });
+    }
+
+    // Get user balance
+    const { data: user } = await supabase
+        .from("users")
+        .select("balance")
+        .eq("id", withdrawal.user_id)
+        .single();
+
+    const newBalance =
+        Number(user.balance) - Number(withdrawal.amount);
+
+    // Update user balance
+    await supabase
+        .from("users")
+        .update({
+            balance: newBalance
+        })
+        .eq("id", withdrawal.user_id);
+
+    // Update withdrawal
+    await supabase
+        .from("withdrawals")
+        .update({
+            status: "Approved"
+        })
+        .eq("id", withdrawalId);
+
+    // Update transaction
+    await supabase
+        .from("transactions")
+        .update({
+            status: "Approved"
+        })
+        .eq("user_id", withdrawal.user_id)
+        .eq("type", "Withdrawal")
+        .eq("status", "Pending");
+
+    res.json({
+        success: true,
+        message: "Withdrawal approved."
+    });
+
+});
+
+/* ---------------- REJECT WITHDRAWAL ---------------- */
+
+app.put("/admin/withdrawals/:id/reject", async (req, res) => {
+
+    const withdrawalId = req.params.id;
+
+    const { data: withdrawal, error } = await supabase
+        .from("withdrawals")
+        .select("*")
+        .eq("id", withdrawalId)
+        .single();
+
+    if (error || !withdrawal) {
+        return res.status(404).json({
+            success: false,
+            message: "Withdrawal not found."
+        });
+    }
+
+    await supabase
+        .from("withdrawals")
+        .update({
+            status: "Rejected"
+        })
+        .eq("id", withdrawalId);
+
+    await supabase
+        .from("transactions")
+        .update({
+            status: "Rejected"
+        })
+        .eq("user_id", withdrawal.user_id)
+        .eq("type", "Withdrawal")
+        .eq("status", "Pending");
+
+    res.json({
+        success: true,
+        message: "Withdrawal rejected."
+    });
+
+});
+
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

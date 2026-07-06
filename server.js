@@ -775,6 +775,8 @@ const { error: uploadError } = await supabase.storage
     .upload(fileName, req.file.buffer, {
         contentType: req.file.mimetype
     });
+    
+    console.log("Upload Error:", uploadError);
 
 if (uploadError) {
     return res.status(500).json({
@@ -786,6 +788,7 @@ if (uploadError) {
 const { data: publicUrl } = supabase.storage
     .from("receipts")
     .getPublicUrl(fileName);
+    console.log("Receipt URL:", publicUrl.publicUrl);
 
 const receipt_url = publicUrl.publicUrl;
 

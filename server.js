@@ -905,6 +905,7 @@ app.put("/admin/withdrawals/:id/reject", async (req, res) => {
         });
     }
 
+    // Update withdrawal
     await supabase
         .from("withdrawals")
         .update({
@@ -912,10 +913,12 @@ app.put("/admin/withdrawals/:id/reject", async (req, res) => {
         })
         .eq("id", withdrawalId);
 
+    // Update transaction
     await supabase
         .from("transactions")
         .update({
-            status: "Rejected"
+            status: "Rejected",
+            description: "Withdrawal rejected. Please contact support service."
         })
         .eq("user_id", withdrawal.user_id)
         .eq("type", "Withdrawal")

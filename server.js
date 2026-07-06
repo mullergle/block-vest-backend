@@ -756,6 +756,7 @@ app.put("/change-password/:id", async (req, res) => {
 });
 /* ---------------- CREATE DEPOSIT ---------------- */
 app.post("/deposit", upload.single("receipt"), async (req, res) => {
+    console.log("Deposit request received");
     const { user_id, amount } = req.body;
 
 if (!req.file) {

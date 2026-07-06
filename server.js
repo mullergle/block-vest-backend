@@ -1104,24 +1104,24 @@ app.put("/admin/deposits/:id/approve", async (req, res) => {
     }
 
     const { data: user } = await supabase
-        .from("users")
-        .select("balance, assets")
-        .eq("id", deposit.user_id)
-        .single();
+    .from("users")
+    .select("balance, btc_balance")
+    .eq("id", deposit.user_id)
+    .single();
 
-    const newBalance =
-        Number(user.balance) + Number(deposit.amount);
+const newBalance =
+    Number(user.balance) + Number(deposit.amount);
 
-    const newAssets =
-        Number(user.assets) + Number(deposit.amount);
-    
-    await supabase
-        .from("users")
-        .update({
-         balance: newBalance,
-         assets: newAssets
-})
-        .eq("id", deposit.user_id);
+const newBtcBalance =
+    Number(user.btc_balance) + Number(deposit.amount);
+
+await supabase
+    .from("users")
+    .update({
+        balance: newBalance,
+        btc_balance: newBtcBalance
+    })
+    .eq("id", deposit.user_id);
 
     await supabase
         .from("deposits")

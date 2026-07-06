@@ -816,7 +816,7 @@ if (error) {
 }
 
 // Save to transaction history
-await supabase
+const { error: transactionError } = await supabase
     .from("transactions")
     .insert([{
         user_id,
@@ -825,6 +825,10 @@ await supabase
         status: "Pending",
         description: "Bitcoin Deposit"
     }]);
+
+if (transactionError) {
+    console.log("Transaction Error:", transactionError);
+}
 
 res.json({
     success: true,

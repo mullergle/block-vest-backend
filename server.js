@@ -937,7 +937,6 @@ app.delete("/admin/withdrawals/:id", async (req, res) => {
 
     const withdrawalId = req.params.id;
 
-    // check if withdrawal exists
     const { data: withdrawal, error } = await supabase
         .from("withdrawals")
         .select("*")
@@ -951,7 +950,7 @@ app.delete("/admin/withdrawals/:id", async (req, res) => {
         });
     }
 
-    // delete withdrawal
+    // ✅ ONLY delete withdrawal (safe)
     const { error: deleteError } = await supabase
         .from("withdrawals")
         .delete()
@@ -963,13 +962,6 @@ app.delete("/admin/withdrawals/:id", async (req, res) => {
             message: deleteError.message
         });
     }
-
-    // optional: delete related transaction too
-    await supabase
-        .from("transactions")
-        .delete()
-        .eq("user_id", withdrawal.user_id)
-        .eq("type", "Withdrawal");
 
     res.json({
         success: true,

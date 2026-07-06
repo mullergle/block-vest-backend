@@ -1019,15 +1019,10 @@ app.delete("/admin/withdrawals/:id", async (req, res) => {
 
 app.get("/admin/deposits", async (req, res) => {
 
-    const { data, error } = await supabase
+    // Get all deposits
+    const { data: deposits, error } = await supabase
         .from("deposits")
-        .select(`
-            *,
-            users (
-                full_name,
-                email
-            )
-        `)
+        .select("*")
         .order("created_at", { ascending: false });
 
     if (error) {
@@ -1037,9 +1032,22 @@ app.get("/admin/deposits", async (req, res) => {
         });
     }
 
+    // Attach user details manually
+    for (const deposit of deposits) {
+
+        const { data: user } = await supabase
+            .from("users")
+            .select("full_name,email")
+            .eq("id", deposit.user_id)
+            .single();
+
+        deposit.users = user;
+
+    }
+
     res.json({
         success: true,
-        deposits: data
+        deposits
     });
 
 });

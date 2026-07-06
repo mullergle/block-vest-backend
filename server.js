@@ -1044,6 +1044,71 @@ app.get("/admin/deposits", async (req, res) => {
 
 });
 
+/* ---------------- APPROVE DEPOSIT ---------------- */
+
+app.put("/admin/deposits/:id/approve", async (req, res) => {
+
+    const depositId = req.params.id;
+
+    const { data: deposit, error } = await supabase
+        .from("deposits")
+        .select("*")
+        .eq("id", depositId)
+        .single();
+
+    if (error || !deposit) {
+        return res.status(404).json({
+            success: false,
+            message: "Deposit not found."
+        });
+    }
+
+    if (deposit.status === "Approved") {
+        return res.status(400).json({
+            success: false,
+            message: "Deposit has already been approved."
+        });
+    }
+
+    const { data: user } = await supabase
+        .from("users")
+        .select("balance")
+        .eq("id", deposit.user_id)
+        .single();
+
+    const newBalance =
+        Number(user.balance) + Number(deposit.amount);
+
+    await supabase
+        .from("users")
+        .update({
+            balance: newBalance
+        })
+        .eq("id", deposit.user_id);
+
+    await supabase
+        .from("deposits")
+        .update({
+            status: "Approved"
+        })
+        .eq("id", depositId);
+
+    await supabase
+        .from("transactions")
+        .update({
+            status: "Approved"
+        })
+        .eq("user_id", deposit.user_id)
+        .eq("type", "Deposit")
+        .eq("status", "Pending");
+
+    res.json({
+        success: true,
+        message: "Deposit approved successfully."
+    });
+
+});
+
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

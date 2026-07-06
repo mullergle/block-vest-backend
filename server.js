@@ -1015,6 +1015,35 @@ app.delete("/admin/withdrawals/:id", async (req, res) => {
 
 });
 
+/* ---------------- ADMIN GET ALL DEPOSITS ---------------- */
+
+app.get("/admin/deposits", async (req, res) => {
+
+    const { data, error } = await supabase
+        .from("deposits")
+        .select(`
+            *,
+            users (
+                full_name,
+                email
+            )
+        `)
+        .order("created_at", { ascending: false });
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        deposits: data
+    });
+
+});
+
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

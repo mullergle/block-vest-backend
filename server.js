@@ -16,6 +16,9 @@ const CODE_EXPIRY = 10 * 60 * 1000; // 10 minutes
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const upload = multer({
+    storage: multer.memoryStorage()
+});
 
 // Middlewares
 app.use(cors());
@@ -752,9 +755,36 @@ app.put("/change-password/:id", async (req, res) => {
     });
 });
 /* ---------------- CREATE DEPOSIT ---------------- */
-app.post("/deposit", async (req, res) => {
+app.post("/deposit", upload.single("receipt"), async (req, res) => {
+    const { user_id, amount } = req.body;
 
-    const { user_id, amount, receipt_url } = req.body;
+if (!req.file) {
+    return res.status(400).json({
+        success: false,
+        message: "Receipt is required."
+    });
+}
+
+const fileName = `${Date.now()}-${req.file.originalname}`;
+
+const { error: uploadError } = await supabase.storage
+    .from("receipts")
+    .upload(fileName, req.file.buffer, {
+        contentType: req.file.mimetype
+    });
+
+if (uploadError) {
+    return res.status(500).json({
+        success: false,
+        message: uploadError.message
+    });
+}
+
+const { data: publicUrl } = supabase.storage
+    .from("receipts")
+    .getPublicUrl(fileName);
+
+const receipt_url = publicUrl.publicUrl;
 
     if (!user_id || !amount || !receipt_url) {
         return res.status(400).json({

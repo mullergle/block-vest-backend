@@ -804,6 +804,8 @@ const receipt_url = publicUrl.publicUrl;
     }])
     .select();
 
+console.log(error);
+
 if (error) {
     return res.status(500).json({
         success: false,

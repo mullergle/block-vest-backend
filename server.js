@@ -308,7 +308,12 @@ app.post("/withdraw/create", async (req, res) => {
         });
     }
 
-    // Check verification code
+    /*
+    =====================================================
+    TEMPORARILY DISABLED EMAIL VERIFICATION
+    Re-enable this after your Resend domain is verified.
+    =====================================================
+
     const savedCode = verificationCodes[email];
 
     if (!savedCode) {
@@ -334,8 +339,12 @@ app.post("/withdraw/create", async (req, res) => {
         });
     }
 
-    // Remove the code after successful verification
     delete verificationCodes[email];
+
+    =====================================================
+    END OF TEMPORARY DISABLE
+    =====================================================
+    */
 
     // Save withdrawal
     const { data, error } = await supabase

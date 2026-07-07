@@ -1204,6 +1204,37 @@ app.put("/admin/deposits/:id/reject", async (req, res) => {
 
 });
 
+/* ---------------- ADMIN NOTIFICATIONS ---------------- */
+
+app.get("/admin/notifications", async(req,res)=>{
+
+const {count: deposits} = await supabase
+.from("deposits")
+.select("*",{count:"exact",head:true})
+.eq("status","Pending");
+
+
+const {count: withdrawals} = await supabase
+.from("withdrawals")
+.select("*",{count:"exact",head:true})
+.eq("status","Pending");
+
+
+res.json({
+
+success:true,
+
+pendingDeposits: deposits || 0,
+
+pendingWithdrawals: withdrawals || 0
+
+});
+
+});
+
+
+
+
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

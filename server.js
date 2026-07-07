@@ -1146,6 +1146,64 @@ await supabase
 
 });
 
+/* ---------------- REJECT DEPOSIT ---------------- */
+
+app.put("/admin/deposits/:id/reject", async (req, res) => {
+
+    const depositId = req.params.id;
+
+
+    const { data: deposit, error } = await supabase
+        .from("deposits")
+        .select("*")
+        .eq("id", depositId)
+        .single();
+
+
+    if (error || !deposit) {
+        return res.status(404).json({
+            success:false,
+            message:"Deposit not found."
+        });
+    }
+
+
+    if (deposit.status === "Rejected") {
+        return res.status(400).json({
+            success:false,
+            message:"Deposit has already been rejected."
+        });
+    }
+
+
+    await supabase
+        .from("deposits")
+        .update({
+            status:"Rejected"
+        })
+        .eq("id", depositId);
+
+
+
+    await supabase
+        .from("transactions")
+        .update({
+            status:"Rejected"
+        })
+        .eq("user_id", deposit.user_id)
+        .eq("type","Deposit")
+        .eq("status","Pending");
+
+
+
+    res.json({
+        success:true,
+        message:"Deposit rejected successfully."
+    });
+
+
+});
+
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

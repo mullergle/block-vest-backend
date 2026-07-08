@@ -65,6 +65,109 @@ app.get("/test", async (req, res) => {
     });
 });
 
+/* ---------------- SEND SIGNUP VERIFICATION CODE ---------------- */
+
+app.post("/signup/send-code", async (req, res) => {
+
+    const { email } = req.body;
+
+    if (!email) {
+        return res.status(400).json({
+            success: false,
+            message: "Email is required."
+        });
+    }
+
+    // Check if email already exists
+    const { data: existingUser } = await supabase
+        .from("users")
+        .select("id")
+        .eq("email", email)
+        .single();
+
+    if (existingUser) {
+        return res.json({
+            success: false,
+            message: "Email already exists."
+        });
+    }
+
+    const code = crypto.randomInt(100000, 999999).toString();
+
+    verificationCodes[email] = {
+        code,
+        expires: Date.now() + CODE_EXPIRY
+    };
+
+    try {
+
+        await resend.emails.send({
+            from: "Block Vest <noreply@blockvest.sbs>",
+            to: email,
+            subject: "Verify your Block Vest account",
+            html: `
+                <h2>Welcome to Block Vest</h2>
+                <p>Your verification code is:</p>
+                <h1>${code}</h1>
+                <p>This code expires in 10 minutes.</p>
+            `
+        });
+
+        res.json({
+            success: true,
+            message: "Verification code sent."
+        });
+
+    } catch (err) {
+
+        console.log(err);
+
+        res.status(500).json({
+            success: false,
+            message: "Unable to send verification code."
+        });
+
+    }
+
+});
+
+/* ---------------- VERIFY SIGNUP CODE ---------------- */
+
+app.post("/signup/verify", (req, res) => {
+
+    const { email, code } = req.body;
+
+    const savedCode = verificationCodes[email];
+
+    if (!savedCode) {
+        return res.status(401).json({
+            success: false,
+            message: "Verification code not found."
+        });
+    }
+
+    if (Date.now() > savedCode.expires) {
+        delete verificationCodes[email];
+
+        return res.status(401).json({
+            success: false,
+            message: "Verification code has expired."
+        });
+    }
+
+    if (savedCode.code !== code) {
+        return res.status(401).json({
+            success: false,
+            message: "Invalid verification code."
+        });
+    }
+
+    res.json({
+        success: true
+    });
+
+});
+
 /* ---------------- SIGNUP ROUTE ---------------- */
 app.post("/signup", async (req, res) => {
     const {

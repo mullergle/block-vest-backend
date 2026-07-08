@@ -147,7 +147,7 @@ app.post("/signup/send-code", async (req, res) => {
 
 /* ---------------- VERIFY SIGNUP CODE ---------------- */
 
-app.post("/signup/verify", (req, res) => {
+app.post("/signup/verify", async (req, res) => {
 
     const { email, code } = req.body;
 
@@ -175,6 +175,39 @@ app.post("/signup/verify", (req, res) => {
             message: "Invalid verification code."
         });
     }
+    
+    const signupInfo = pendingSignups[email];
+
+if (!signupInfo) {
+    return res.status(400).json({
+        success:false,
+        message:"Signup information not found."
+    });
+}
+
+
+const { data, error } = await supabase
+    .from("users")
+    .insert([{
+        full_name: signupInfo.fullName,
+        phone: signupInfo.phone,
+        country: signupInfo.country,
+        email: signupInfo.email,
+        password: signupInfo.password
+    }])
+    .select();
+
+
+if(error){
+    return res.status(500).json({
+        success:false,
+        message:error.message
+    });
+}
+
+
+delete pendingSignups[email];
+delete verificationCodes[email];
 
     res.json({
         success: true

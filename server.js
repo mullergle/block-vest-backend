@@ -9,10 +9,12 @@ const supabase = require("./supabase");
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// Temporary storage for verification codes
+ // Temporary storage for verification codes
 const verificationCodes = {};
 const verifiedEmails = {};
-const CODE_EXPIRY = 10 * 60 * 1000; // 10 minutes
+const pendingSignups = {};
+
+const CODE_EXPIRY = 10 * 60 * 1000;// 10 minutes
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -69,7 +71,13 @@ app.get("/test", async (req, res) => {
 
 app.post("/signup/send-code", async (req, res) => {
 
-    const { email } = req.body;
+    const {
+        fullName,
+        phone,
+        country,
+        email,
+        password
+    } = req.body;
 
     if (!email) {
         return res.status(400).json({
@@ -91,7 +99,13 @@ app.post("/signup/send-code", async (req, res) => {
             message: "Email already exists."
         });
     }
-
+    pendingSignups[email] = {
+    fullName,
+    phone,
+    country,
+    email,
+    password
+};
     const code = crypto.randomInt(100000, 999999).toString();
 
     verificationCodes[email] = {

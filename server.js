@@ -230,7 +230,7 @@ app.post("/forgot-password", async (req, res) => {
     try {
 
         await resend.emails.send({
-            from: "Block Vest <onboarding@resend.dev>",
+            from: "Block Vest <noreply@blockvest.sbs>",
             to: email,
             subject: "Block Vest Password Reset Code",
             html: `
@@ -284,7 +284,7 @@ app.post("/withdraw/send-code", async (req, res) => {
     try {
 
         await resend.emails.send({
-            from: "Block Vest <onboarding@resend.dev>",
+            from: "Block Vest <noreply@blockvest.sbs>",
             to: email,
             subject: "Block Vest Withdrawal Verification",
             html: `
@@ -337,11 +337,8 @@ app.post("/withdraw/create", async (req, res) => {
         });
     }
 
-    /*
-    =====================================================
-    TEMPORARILY DISABLED EMAIL VERIFICATION
-    Re-enable this after your Resend domain is verified.
-    =====================================================
+    
+    
 
     const savedCode = verificationCodes[email];
 
@@ -368,12 +365,7 @@ app.post("/withdraw/create", async (req, res) => {
         });
     }
 
-    delete verificationCodes[email];
-
-    =====================================================
-    END OF TEMPORARY DISABLE
-    =====================================================
-    */
+    
 
     // Save withdrawal
     const { data, error } = await supabase

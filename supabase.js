@@ -20,6 +20,11 @@ try {
     throw new Error("SUPABASE_URL is not a valid URL");
 }
 
-const supabase = createClient(url, key);
+const supabase = createClient(url, key, {
+    auth: {
+        persistSession: false,
+        autoRefreshToken: false
+    }
+});
 
 module.exports = supabase;

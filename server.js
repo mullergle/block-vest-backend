@@ -1702,6 +1702,63 @@ app.get("/admin/support/messages", async (req, res) => {
 
 });
 
+/* ---------------- ADMIN SEND SUPPORT MESSAGE ---------------- */
+
+app.post("/admin/support/messages", async (req, res) => {
+
+    try {
+
+        const {
+            user_id,
+            message
+        } = req.body;
+
+        if (!user_id || !message) {
+            return res.status(400).json({
+                success: false,
+                message: "User ID and message are required."
+            });
+        }
+
+        const { data, error } = await supabase
+            .from("support_messages")
+            .insert([{
+                user_id,
+                sender: "admin",
+                message,
+                is_read: true
+            }])
+            .select()
+            .single();
+
+        if (error) {
+
+            console.error("ADMIN SUPPORT SEND ERROR:", error);
+
+            return res.status(500).json({
+                success: false,
+                message: error.message
+            });
+        }
+
+        res.json({
+            success: true,
+            message: data
+        });
+
+    } catch (error) {
+
+        console.error("ADMIN SUPPORT ERROR:", error);
+
+        res.status(500).json({
+            success: false,
+            message: "Unable to send support message."
+        });
+
+    }
+
+});
+
 
 
 /* ---------------- START SERVER ---------------- */

@@ -1589,7 +1589,7 @@ app.get("/admin/support/messages/:userId", async (req, res) => {
 
 /* ---------------- ADMIN SEND SUPPORT MESSAGE ---------------- */
 
-app.post("/admin/support/messages", async (req, res) => {
+app.post("/support/messages", async (req, res) => {
 
     const {
         user_id,
@@ -1607,8 +1607,9 @@ app.post("/admin/support/messages", async (req, res) => {
         .from("support_messages")
         .insert([{
             user_id,
-            sender: "admin",
-            message
+            sender: "user",
+            message,
+            is_read: true
         }])
         .select()
         .single();
@@ -1618,6 +1619,23 @@ app.post("/admin/support/messages", async (req, res) => {
             success: false,
             message: error.message
         });
+    }
+
+    // User replied, so clear outstanding admin messages
+    const { error: readError } = await supabase
+        .from("support_messages")
+        .update({
+            is_read: true
+        })
+        .eq("user_id", user_id)
+        .eq("sender", "admin")
+        .eq("is_read", false);
+
+    if (readError) {
+        console.error(
+            "Unable to clear admin notification:",
+            readError
+        );
     }
 
     res.json({

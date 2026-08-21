@@ -1520,6 +1520,172 @@ app.put("/admin/settings/btc-address", async (req, res) => {
 });
 
 
+/* ---------------- ADMIN GET ALL CHAT USERS ---------------- */
+
+app.get("/admin/support/users", async (req, res) => {
+
+    const { data, error } = await supabase
+        .from("support_messages")
+        .select(`
+            user_id,
+            sender,
+            message,
+            created_at
+        `)
+        .order("created_at", { ascending: false });
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    // Get unique users who have messages
+    const uniqueUsers = [];
+
+    for (const msg of data) {
+
+        if (!uniqueUsers.includes(msg.user_id)) {
+            uniqueUsers.push(msg.user_id);
+        }
+
+    }
+
+    res.json({
+        success: true,
+        users: uniqueUsers
+    });
+
+});
+
+
+/* ---------------- ADMIN GET USER CHAT ---------------- */
+
+app.get("/admin/support/messages/:userId", async (req, res) => {
+
+    const { userId } = req.params;
+
+    const { data, error } = await supabase
+        .from("support_messages")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true });
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        messages: data
+    });
+
+});
+
+
+/* ---------------- ADMIN SEND SUPPORT MESSAGE ---------------- */
+
+app.post("/admin/support/messages", async (req, res) => {
+
+    const {
+        user_id,
+        message
+    } = req.body;
+
+    if (!user_id || !message) {
+        return res.status(400).json({
+            success: false,
+            message: "User ID and message are required."
+        });
+    }
+
+    const { data, error } = await supabase
+        .from("support_messages")
+        .insert([{
+            user_id,
+            sender: "admin",
+            message
+        }])
+        .select()
+        .single();
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        message: data
+    });
+
+});
+
+
+/* ---------------- ADMIN UNREAD CHAT COUNT ---------------- */
+
+app.get("/admin/support/unread", async (req, res) => {
+
+    const { count, error } = await supabase
+        .from("support_messages")
+        .select("*", {
+            count: "exact",
+            head: true
+        })
+        .eq("sender", "user")
+        .eq("is_read", false);
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        unread: count || 0
+    });
+
+});
+
+
+/* ---------------- MARK USER MESSAGES AS READ ---------------- */
+
+app.put("/admin/support/messages/:userId/read", async (req, res) => {
+
+    const { userId } = req.params;
+
+    const { error } = await supabase
+        .from("support_messages")
+        .update({
+            is_read: true
+        })
+        .eq("user_id", userId)
+        .eq("sender", "user")
+        .eq("is_read", false);
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        message: "Messages marked as read."
+    });
+
+});
+
+
 
 
 

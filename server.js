@@ -1759,6 +1759,80 @@ app.post("/admin/support/messages", async (req, res) => {
 
 });
 
+/* ---------------- USER CHAT NOTIFICATION ---------------- */
+
+app.get("/chat/notification/:userId", async (req, res) => {
+
+    const { userId } = req.params;
+
+    try {
+
+        const { data, error } = await supabase
+            .from("support_messages")
+            .select("sender, created_at")
+            .eq("user_id", userId)
+            .order("created_at", {
+                ascending: false
+            })
+            .limit(1);
+
+        if (error) {
+
+            console.error(
+                "CHAT NOTIFICATION ERROR:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message: error.message
+            });
+        }
+
+        // No messages yet
+        if (!data || data.length === 0) {
+
+            return res.json({
+                success: true,
+                unread: false
+            });
+
+        }
+
+        const latestMessage = data[0];
+
+        // Latest message came from admin
+        if (latestMessage.sender === "admin") {
+
+            return res.json({
+                success: true,
+                unread: true
+            });
+
+        }
+
+        // Latest message came from user
+        return res.json({
+            success: true,
+            unread: false
+        });
+
+    } catch (error) {
+
+        console.error(
+            "CHAT NOTIFICATION ERROR:",
+            error
+        );
+
+        res.status(500).json({
+            success: false,
+            message: "Unable to check chat notification."
+        });
+
+    }
+
+});
+
 
 
 /* ---------------- START SERVER ---------------- */

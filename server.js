@@ -1375,6 +1375,152 @@ pendingWithdrawals: withdrawals || 0
 });
 
 
+/* ---------------- SUPPORT CHAT ---------------- */
+
+// Get messages for a user
+app.get("/support/messages/:userId", async (req, res) => {
+
+    const { userId } = req.params;
+
+    const { data, error } = await supabase
+        .from("support_messages")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true });
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        messages: data
+    });
+
+});
+
+
+// Send a support message
+app.post("/support/messages", async (req, res) => {
+
+    const {
+        user_id,
+        message
+    } = req.body;
+
+    if (!user_id || !message) {
+        return res.status(400).json({
+            success: false,
+            message: "User ID and message are required."
+        });
+    }
+
+    const { data, error } = await supabase
+        .from("support_messages")
+        .insert([{
+            user_id,
+            sender: "user",
+            message
+        }])
+        .select()
+        .single();
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        message: data
+    });
+
+});
+
+
+/* ---------------- BTC DEPOSIT ADDRESS ---------------- */
+
+// Get current BTC deposit address
+app.get("/settings/btc-address", async (req, res) => {
+
+    const { data, error } = await supabase
+        .from("platform_settings")
+        .select("btc_deposit_address")
+        .limit(1)
+        .single();
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        btc_deposit_address: data.btc_deposit_address || ""
+    });
+
+});
+
+
+// Admin update BTC deposit address
+app.put("/admin/settings/btc-address", async (req, res) => {
+
+    const { btc_deposit_address } = req.body;
+
+    if (!btc_deposit_address || !btc_deposit_address.trim()) {
+        return res.status(400).json({
+            success: false,
+            message: "BTC deposit address is required."
+        });
+    }
+
+    const { data: existing, error: findError } = await supabase
+        .from("platform_settings")
+        .select("id")
+        .limit(1)
+        .single();
+
+    if (findError || !existing) {
+        return res.status(404).json({
+            success: false,
+            message: "Platform settings not found."
+        });
+    }
+
+    const { data, error } = await supabase
+        .from("platform_settings")
+        .update({
+            btc_deposit_address: btc_deposit_address.trim(),
+            updated_at: new Date().toISOString()
+        })
+        .eq("id", existing.id)
+        .select()
+        .single();
+
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    res.json({
+        success: true,
+        message: "BTC deposit address updated successfully.",
+        settings: data
+    });
+
+});
+
+
+
 
 
 /* ---------------- START SERVER ---------------- */

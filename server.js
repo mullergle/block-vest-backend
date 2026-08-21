@@ -1587,63 +1587,6 @@ app.get("/admin/support/messages/:userId", async (req, res) => {
 });
 
 
-/* ---------------- ADMIN SEND SUPPORT MESSAGE ---------------- */
-
-app.post("/support/messages", async (req, res) => {
-
-    const {
-        user_id,
-        message
-    } = req.body;
-
-    if (!user_id || !message) {
-        return res.status(400).json({
-            success: false,
-            message: "User ID and message are required."
-        });
-    }
-
-    const { data, error } = await supabase
-        .from("support_messages")
-        .insert([{
-            user_id,
-            sender: "user",
-            message,
-            is_read: true
-        }])
-        .select()
-        .single();
-
-    if (error) {
-        return res.status(500).json({
-            success: false,
-            message: error.message
-        });
-    }
-
-    // User replied, so clear outstanding admin messages
-    const { error: readError } = await supabase
-        .from("support_messages")
-        .update({
-            is_read: true
-        })
-        .eq("user_id", user_id)
-        .eq("sender", "admin")
-        .eq("is_read", false);
-
-    if (readError) {
-        console.error(
-            "Unable to clear admin notification:",
-            readError
-        );
-    }
-
-    res.json({
-        success: true,
-        message: data
-    });
-
-});
 
 
 /* ---------------- ADMIN UNREAD CHAT COUNT ---------------- */

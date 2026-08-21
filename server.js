@@ -1685,7 +1685,61 @@ app.put("/admin/support/messages/:userId/read", async (req, res) => {
 
 });
 
+// ==========================================
+// ADMIN - GET USERS WITH SUPPORT MESSAGES
+// ==========================================
 
+app.get("/admin/support/messages", async (req, res) => {
+
+    try {
+
+        const { data, error } = await supabase
+            .from("support_messages")
+            .select("user_id")
+            .order("created_at", {
+                ascending: false
+            });
+
+        if (error) {
+
+            console.error(
+                "SUPPORT USERS ERROR:",
+                error
+            );
+
+            return res.status(500).json({
+                success: false,
+                message: error.message
+            });
+
+        }
+
+        // Remove duplicate user IDs
+        const userIds = [
+            ...new Set(
+                (data || []).map(
+                    message => message.user_id
+                )
+            )
+        ];
+
+        res.json({
+            success: true,
+            users: userIds
+        });
+
+    } catch (error) {
+
+        console.error(error);
+
+        res.status(500).json({
+            success: false,
+            message: "Unable to load support conversations"
+        });
+
+    }
+
+});
 
 
 

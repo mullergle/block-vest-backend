@@ -36,6 +36,13 @@ function formatMoney(value) {
     });
 }
 
+/* ---------------- SAFE NUMBER CLEANER (strip commas) ---------------- */
+function cleanNumber(v) {
+    if (v === undefined || v === null || v === "") return v;
+    const n = Number(String(v).replace(/,/g, "").trim());
+    return isNaN(n) ? v : n;
+}
+
 /* ---------------- HOME ROUTE ---------------- */
 app.get("/", (req, res) => {
     res.json({
@@ -339,16 +346,16 @@ app.get("/user/:id", async (req, res) => {
         });
     }
 
-    // Formatted display fields (raw values still available)
+    // Overwrite numeric fields with comma-formatted strings for display
     const formattedUser = {
         ...data,
-        balance_display:       formatMoney(data.balance),
-        total_trade_display:   formatMoney(data.total_trade),
-        assets_display:        formatMoney(data.assets),
-        active_assets_display: formatMoney(data.active_assets),
-        btc_balance_display:   formatMoney(data.btc_balance),
-        eth_balance_display:   formatMoney(data.eth_balance),
-        usdt_balance_display:  formatMoney(data.usdt_balance)
+        balance:       formatMoney(data.balance),
+        total_trade:   formatMoney(data.total_trade),
+        assets:        formatMoney(data.assets),
+        active_assets: formatMoney(data.active_assets),
+        btc_balance:   formatMoney(data.btc_balance),
+        eth_balance:   formatMoney(data.eth_balance),
+        usdt_balance:  formatMoney(data.usdt_balance)
     };
 
     res.json({
@@ -523,13 +530,15 @@ app.post("/withdraw/create", async (req, res) => {
         });
     }
 
+    const cleanAmount = cleanNumber(amount);
+
     const { data, error } = await supabase
         .from("withdrawals")
         .insert([{
             user_id,
             method,
             wallet_address,
-            amount,
+            amount: cleanAmount,
             status: "Pending"
         }])
         .select();
@@ -546,7 +555,7 @@ app.post("/withdraw/create", async (req, res) => {
         .insert([{
             user_id,
             type: "Withdrawal",
-            amount,
+            amount: cleanAmount,
             status: "Pending",
             description: "Bitcoin Withdrawal"
         }]);
@@ -599,8 +608,6 @@ app.post("/verify-code", (req, res) => {
     delete verificationCodes[email];
 
     verifiedEmails[email] = true;
-
-    delete verificationCodes[email];
 
     res.json({
         success: true,
@@ -702,10 +709,10 @@ app.get("/admin/withdrawals", async (req, res) => {
         });
     }
 
-    // Add formatted amount for display
+    // Overwrite amount with formatted string for display
     const formatted = (data || []).map(w => ({
         ...w,
-        amount_display: formatMoney(w.amount)
+        amount: formatMoney(w.amount)
     }));
 
     res.json({
@@ -738,7 +745,7 @@ app.get("/admin/unread-withdrawals", async (req, res) => {
 
 });
 
-/* ---------------- GET SINGLE USER ---------------- */
+/* ---------------- GET SINGLE USER (ADMIN) ---------------- */
 app.get("/admin/user/:id", async (req, res) => {
 
     const userId = req.params.id;
@@ -768,16 +775,16 @@ app.get("/admin/user/:id", async (req, res) => {
         });
     }
 
-    // Formatted display values (raw values remain unchanged)
+    // Overwrite numeric fields with comma-formatted strings for display
     const formattedUser = {
         ...data,
-        balance_display:       formatMoney(data.balance),
-        total_trade_display:   formatMoney(data.total_trade),
-        assets_display:        formatMoney(data.assets),
-        active_assets_display: formatMoney(data.active_assets),
-        btc_balance_display:   formatMoney(data.btc_balance),
-        eth_balance_display:   formatMoney(data.eth_balance),
-        usdt_balance_display:  formatMoney(data.usdt_balance)
+        balance:       formatMoney(data.balance),
+        total_trade:   formatMoney(data.total_trade),
+        assets:        formatMoney(data.assets),
+        active_assets: formatMoney(data.active_assets),
+        btc_balance:   formatMoney(data.btc_balance),
+        eth_balance:   formatMoney(data.eth_balance),
+        usdt_balance:  formatMoney(data.usdt_balance)
     };
 
     return res.json({
@@ -804,21 +811,16 @@ app.put("/admin/user/:id", async (req, res) => {
 
     console.log("BTC received:", btc_balance);
 
-    // Safety: strip commas from any incoming numbers
-    const clean = (v) => v === undefined || v === null || v === ""
-        ? v
-        : Number(String(v).replace(/,/g, ""));
-
     const { data, error } = await supabase
         .from("users")
         .update({
-            balance:       clean(balance),
-            total_trade:   clean(total_trade),
-            assets:        clean(assets),
-            active_assets: clean(active_assets),
-            btc_balance:   clean(btc_balance),
-            eth_balance:   clean(eth_balance),
-            usdt_balance:  clean(usdt_balance),
+            balance:       cleanNumber(balance),
+            total_trade:   cleanNumber(total_trade),
+            assets:        cleanNumber(assets),
+            active_assets: cleanNumber(active_assets),
+            btc_balance:   cleanNumber(btc_balance),
+            eth_balance:   cleanNumber(eth_balance),
+            usdt_balance:  cleanNumber(usdt_balance),
             is_suspended
         })
         .eq("id", userId)
@@ -849,16 +851,12 @@ app.put("/admin/user-assets/:id", async (req, res) => {
         usdt_balance
     } = req.body;
 
-    const clean = (v) => v === undefined || v === null || v === ""
-        ? v
-        : Number(String(v).replace(/,/g, ""));
-
     const { data, error } = await supabase
         .from("users")
         .update({
-            btc_balance:  clean(btc_balance),
-            eth_balance:  clean(eth_balance),
-            usdt_balance: clean(usdt_balance)
+            btc_balance:  cleanNumber(btc_balance),
+            eth_balance:  cleanNumber(eth_balance),
+            usdt_balance: cleanNumber(usdt_balance)
         })
         .eq("id", userId)
         .select();
@@ -893,16 +891,16 @@ app.get("/admin/users", async (req, res) => {
         });
     }
 
-    // Add display fields
+    // Overwrite numeric fields with comma-formatted strings for display
     const usersWithDisplay = (data || []).map(u => ({
         ...u,
-        balance_display:       formatMoney(u.balance),
-        total_trade_display:   formatMoney(u.total_trade),
-        assets_display:        formatMoney(u.assets),
-        active_assets_display: formatMoney(u.active_assets),
-        btc_balance_display:   formatMoney(u.btc_balance),
-        eth_balance_display:   formatMoney(u.eth_balance),
-        usdt_balance_display:  formatMoney(u.usdt_balance)
+        balance:       formatMoney(u.balance),
+        total_trade:   formatMoney(u.total_trade),
+        assets:        formatMoney(u.assets),
+        active_assets: formatMoney(u.active_assets),
+        btc_balance:   formatMoney(u.btc_balance),
+        eth_balance:   formatMoney(u.eth_balance),
+        usdt_balance:  formatMoney(u.usdt_balance)
     }));
 
     res.json({
@@ -1010,11 +1008,13 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
         });
     }
 
+    const cleanAmount = cleanNumber(amount);
+
     const { data, error } = await supabase
         .from("deposits")
         .insert([{
             user_id,
-            amount,
+            amount: cleanAmount,
             receipt_url,
             status: "Pending"
         }])
@@ -1036,7 +1036,7 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
         .insert([{
             user_id,
             type: "Deposit",
-            amount,
+            amount: cleanAmount,
             status: "Pending",
             description: "Bitcoin Deposit"
         }]);
@@ -1071,10 +1071,10 @@ app.get("/transactions/:userId", async (req, res) => {
         });
     }
 
-    // Add formatted amount for display
+    // Overwrite amount with formatted string for display
     const formatted = (data || []).map(t => ({
         ...t,
-        amount_display: formatMoney(t.amount)
+        amount: formatMoney(t.amount)
     }));
 
     res.json({
@@ -1248,7 +1248,7 @@ app.get("/admin/deposits", async (req, res) => {
             .single();
 
         deposit.users = user;
-        deposit.amount_display = formatMoney(deposit.amount);
+        deposit.amount = formatMoney(deposit.amount);
 
     }
 

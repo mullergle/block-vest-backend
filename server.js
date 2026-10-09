@@ -5,17 +5,16 @@ const multer = require("multer");
 const { Resend } = require("resend");
 const crypto = require("crypto");
 
-
 const supabase = require("./supabase");
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
- // Temporary storage for verification codes
+// Temporary storage for verification codes
 const verificationCodes = {};
 const verifiedEmails = {};
 const pendingSignups = {};
 
-const CODE_EXPIRY = 10 * 60 * 1000;// 10 minutes
+const CODE_EXPIRY = 10 * 60 * 1000; // 10 minutes
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -26,6 +25,16 @@ const upload = multer({
 // Middlewares
 app.use(cors());
 app.use(express.json());
+
+/* ---------------- NUMBER FORMATTER HELPER ---------------- */
+function formatMoney(value) {
+    const num = Number(value || 0);
+    if (isNaN(num)) return "0.00";
+    return num.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    });
+}
 
 /* ---------------- HOME ROUTE ---------------- */
 app.get("/", (req, res) => {
@@ -87,7 +96,6 @@ app.post("/signup/send-code", async (req, res) => {
         });
     }
 
-    // Check if email already exists
     const { data: existingUser } = await supabase
         .from("users")
         .select("id")
@@ -100,13 +108,15 @@ app.post("/signup/send-code", async (req, res) => {
             message: "Email already exists."
         });
     }
+
     pendingSignups[email] = {
-    fullName,
-    phone,
-    country,
-    email,
-    password
-};
+        fullName,
+        phone,
+        country,
+        email,
+        password
+    };
+
     const code = crypto.randomInt(100000, 999999).toString();
 
     verificationCodes[email] = {
@@ -176,39 +186,36 @@ app.post("/signup/verify", async (req, res) => {
             message: "Invalid verification code."
         });
     }
-    
+
     const signupInfo = pendingSignups[email];
 
-if (!signupInfo) {
-    return res.status(400).json({
-        success:false,
-        message:"Signup information not found."
-    });
-}
+    if (!signupInfo) {
+        return res.status(400).json({
+            success: false,
+            message: "Signup information not found."
+        });
+    }
 
+    const { data, error } = await supabase
+        .from("users")
+        .insert([{
+            full_name: signupInfo.fullName,
+            phone: signupInfo.phone,
+            country: signupInfo.country,
+            email: signupInfo.email,
+            password: signupInfo.password
+        }])
+        .select();
 
-const { data, error } = await supabase
-    .from("users")
-    .insert([{
-        full_name: signupInfo.fullName,
-        phone: signupInfo.phone,
-        country: signupInfo.country,
-        email: signupInfo.email,
-        password: signupInfo.password
-    }])
-    .select();
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
 
-
-if(error){
-    return res.status(500).json({
-        success:false,
-        message:error.message
-    });
-}
-
-
-delete pendingSignups[email];
-delete verificationCodes[email];
+    delete pendingSignups[email];
+    delete verificationCodes[email];
 
     res.json({
         success: true
@@ -233,7 +240,6 @@ app.post("/signup", async (req, res) => {
         });
     }
 
-    // Check if email already exists
     const { data: existingUser } = await supabase
         .from("users")
         .select("id")
@@ -290,7 +296,6 @@ app.post("/login", async (req, res) => {
         .eq("password", password)
         .single();
 
-    // Wrong email or password
     if (error || !data) {
         return res.status(401).json({
             success: false,
@@ -298,7 +303,6 @@ app.post("/login", async (req, res) => {
         });
     }
 
-    // 🚫 Block suspended accounts
     if (data.is_suspended) {
         return res.status(403).json({
             success: false,
@@ -335,13 +339,24 @@ app.get("/user/:id", async (req, res) => {
         });
     }
 
+    // Formatted display fields (raw values still available)
+    const formattedUser = {
+        ...data,
+        balance_display:       formatMoney(data.balance),
+        total_trade_display:   formatMoney(data.total_trade),
+        assets_display:        formatMoney(data.assets),
+        active_assets_display: formatMoney(data.active_assets),
+        btc_balance_display:   formatMoney(data.btc_balance),
+        eth_balance_display:   formatMoney(data.eth_balance),
+        usdt_balance_display:  formatMoney(data.usdt_balance)
+    };
+
     res.json({
         success: true,
-        user: data
+        user: formattedUser
     });
 
 });
-
 
 /* ---------------- FORGET CODE ---------------- */
 
@@ -369,14 +384,12 @@ app.post("/forgot-password", async (req, res) => {
         });
     }
 
-    // Generate 6-digit code
     const code = crypto.randomInt(100000, 999999).toString();
 
-    // Save code temporarily
     verificationCodes[email] = {
-    code: code,
-    expires: Date.now() + CODE_EXPIRY
-};
+        code: code,
+        expires: Date.now() + CODE_EXPIRY
+    };
 
     try {
 
@@ -423,10 +436,8 @@ app.post("/withdraw/send-code", async (req, res) => {
         });
     }
 
-    // Generate 6-digit code
     const code = crypto.randomInt(100000, 999999).toString();
 
-    // Save temporarily
     verificationCodes[email] = {
         code,
         expires: Date.now() + CODE_EXPIRY
@@ -480,16 +491,12 @@ app.post("/withdraw/create", async (req, res) => {
         amount
     } = req.body;
 
-    // Check required fields
     if (!user_id || !email || !code || !method || !wallet_address || !amount) {
         return res.status(400).json({
             success: false,
             message: "All fields are required."
         });
     }
-
-    
-    
 
     const savedCode = verificationCodes[email];
 
@@ -516,9 +523,6 @@ app.post("/withdraw/create", async (req, res) => {
         });
     }
 
-    
-
-    // Save withdrawal
     const { data, error } = await supabase
         .from("withdrawals")
         .insert([{
@@ -537,7 +541,6 @@ app.post("/withdraw/create", async (req, res) => {
         });
     }
 
-    // Save transaction history
     await supabase
         .from("transactions")
         .insert([{
@@ -570,53 +573,53 @@ app.post("/verify-code", (req, res) => {
 
     const savedCode = verificationCodes[email];
 
-if (!savedCode) {
-    return res.status(401).json({
-        success: false,
-        message: "No verification code found."
-    });
-}
+    if (!savedCode) {
+        return res.status(401).json({
+            success: false,
+            message: "No verification code found."
+        });
+    }
 
-if (Date.now() > savedCode.expires) {
+    if (Date.now() > savedCode.expires) {
+        delete verificationCodes[email];
+
+        return res.status(401).json({
+            success: false,
+            message: "Verification code has expired. Please request a new one."
+        });
+    }
+
+    if (savedCode.code !== code) {
+        return res.status(401).json({
+            success: false,
+            message: "Invalid verification code."
+        });
+    }
+
     delete verificationCodes[email];
 
-    return res.status(401).json({
-        success: false,
-        message: "Verification code has expired. Please request a new one."
-    });
-}
+    verifiedEmails[email] = true;
 
-if (savedCode.code !== code) {
-    return res.status(401).json({
-        success: false,
-        message: "Invalid verification code."
-    });
-}
     delete verificationCodes[email];
 
-// Mark this email as verified
-verifiedEmails[email] = true;
-
-// Remove the verification code so it can't be used again
-delete verificationCodes[email];
-
-res.json({
-    success: true,
-    message: "Verification successful."
-});
+    res.json({
+        success: true,
+        message: "Verification successful."
+    });
 
 });
+
 /* ---------------- RESET PASSWORD ---------------- */
 app.post("/reset-password", async (req, res) => {
 
     const { email, password } = req.body;
-    
+
     if (!verifiedEmails[email]) {
-    return res.status(403).json({
-        success: false,
-        message: "Please verify your email first."
-    });
-}
+        return res.status(403).json({
+            success: false,
+            message: "Please verify your email first."
+        });
+    }
 
     if (!email || !password) {
         return res.status(400).json({
@@ -652,13 +655,12 @@ app.post("/reset-password", async (req, res) => {
         });
     }
 
-    // Remove verification after password reset
-delete verifiedEmails[email];
+    delete verifiedEmails[email];
 
-res.json({
-    success: true,
-    message: "Password reset successfully."
-});
+    res.json({
+        success: true,
+        message: "Password reset successfully."
+    });
 
 });
 
@@ -700,9 +702,15 @@ app.get("/admin/withdrawals", async (req, res) => {
         });
     }
 
+    // Add formatted amount for display
+    const formatted = (data || []).map(w => ({
+        ...w,
+        amount_display: formatMoney(w.amount)
+    }));
+
     res.json({
         success: true,
-        withdrawals: data
+        withdrawals: formatted
     });
 
 });
@@ -760,9 +768,21 @@ app.get("/admin/user/:id", async (req, res) => {
         });
     }
 
+    // Formatted display values (raw values remain unchanged)
+    const formattedUser = {
+        ...data,
+        balance_display:       formatMoney(data.balance),
+        total_trade_display:   formatMoney(data.total_trade),
+        assets_display:        formatMoney(data.assets),
+        active_assets_display: formatMoney(data.active_assets),
+        btc_balance_display:   formatMoney(data.btc_balance),
+        eth_balance_display:   formatMoney(data.eth_balance),
+        usdt_balance_display:  formatMoney(data.usdt_balance)
+    };
+
     return res.json({
         success: true,
-        user: data
+        user: formattedUser
     });
 });
 
@@ -771,29 +791,36 @@ app.put("/admin/user/:id", async (req, res) => {
 
     const userId = req.params.id;
 
-   const {
-    balance,
-    total_trade,
-    assets,
-    active_assets,
-    btc_balance,
-    eth_balance,
-    usdt_balance,
-    is_suspended
-} = req.body;
-console.log("BTC received:", btc_balance);
+    const {
+        balance,
+        total_trade,
+        assets,
+        active_assets,
+        btc_balance,
+        eth_balance,
+        usdt_balance,
+        is_suspended
+    } = req.body;
+
+    console.log("BTC received:", btc_balance);
+
+    // Safety: strip commas from any incoming numbers
+    const clean = (v) => v === undefined || v === null || v === ""
+        ? v
+        : Number(String(v).replace(/,/g, ""));
+
     const { data, error } = await supabase
         .from("users")
-       .update({
-    balance,
-    total_trade,
-    assets,
-    active_assets,
-    btc_balance,
-    eth_balance,
-    usdt_balance,
-    is_suspended
-})
+        .update({
+            balance:       clean(balance),
+            total_trade:   clean(total_trade),
+            assets:        clean(assets),
+            active_assets: clean(active_assets),
+            btc_balance:   clean(btc_balance),
+            eth_balance:   clean(eth_balance),
+            usdt_balance:  clean(usdt_balance),
+            is_suspended
+        })
         .eq("id", userId)
         .select();
 
@@ -822,12 +849,16 @@ app.put("/admin/user-assets/:id", async (req, res) => {
         usdt_balance
     } = req.body;
 
+    const clean = (v) => v === undefined || v === null || v === ""
+        ? v
+        : Number(String(v).replace(/,/g, ""));
+
     const { data, error } = await supabase
         .from("users")
         .update({
-            btc_balance,
-            eth_balance,
-            usdt_balance
+            btc_balance:  clean(btc_balance),
+            eth_balance:  clean(eth_balance),
+            usdt_balance: clean(usdt_balance)
         })
         .eq("id", userId)
         .select();
@@ -850,11 +881,11 @@ app.put("/admin/user-assets/:id", async (req, res) => {
 app.get("/admin/users", async (req, res) => {
 
     const { data, error } = await supabase
-    .from("users")
-    .select("*")
-    .eq("is_admin", false)
-    .order("id", { ascending: false });
-    
+        .from("users")
+        .select("*")
+        .eq("is_admin", false)
+        .order("id", { ascending: false });
+
     if (error) {
         return res.status(500).json({
             success: false,
@@ -862,9 +893,21 @@ app.get("/admin/users", async (req, res) => {
         });
     }
 
+    // Add display fields
+    const usersWithDisplay = (data || []).map(u => ({
+        ...u,
+        balance_display:       formatMoney(u.balance),
+        total_trade_display:   formatMoney(u.total_trade),
+        assets_display:        formatMoney(u.assets),
+        active_assets_display: formatMoney(u.active_assets),
+        btc_balance_display:   formatMoney(u.btc_balance),
+        eth_balance_display:   formatMoney(u.eth_balance),
+        usdt_balance_display:  formatMoney(u.usdt_balance)
+    }));
+
     res.json({
         success: true,
-        users: data
+        users: usersWithDisplay
     });
 
 });
@@ -882,7 +925,6 @@ app.put("/change-password/:id", async (req, res) => {
         });
     }
 
-    // get user
     const { data: user, error } = await supabase
         .from("users")
         .select("*")
@@ -896,7 +938,6 @@ app.put("/change-password/:id", async (req, res) => {
         });
     }
 
-    // check old password
     if (user.password !== old_password) {
         return res.status(401).json({
             success: false,
@@ -904,7 +945,6 @@ app.put("/change-password/:id", async (req, res) => {
         });
     }
 
-    // update password
     const { error: updateError } = await supabase
         .from("users")
         .update({ password: new_password })
@@ -922,43 +962,46 @@ app.put("/change-password/:id", async (req, res) => {
         message: "Password updated successfully"
     });
 });
+
 /* ---------------- CREATE DEPOSIT ---------------- */
 app.post("/deposit", upload.single("receipt"), async (req, res) => {
     console.log("Deposit request received");
     console.log("Body:", req.body);
     console.log("File:", req.file);
+
     const { user_id, amount } = req.body;
 
-if (!req.file) {
-    return res.status(400).json({
-        success: false,
-        message: "Receipt is required."
-    });
-}
+    if (!req.file) {
+        return res.status(400).json({
+            success: false,
+            message: "Receipt is required."
+        });
+    }
 
-const fileName = `${Date.now()}-${req.file.originalname}`;
+    const fileName = `${Date.now()}-${req.file.originalname}`;
 
-const { error: uploadError } = await supabase.storage
-    .from("receipts")
-    .upload(fileName, req.file.buffer, {
-        contentType: req.file.mimetype
-    });
-    
+    const { error: uploadError } = await supabase.storage
+        .from("receipts")
+        .upload(fileName, req.file.buffer, {
+            contentType: req.file.mimetype
+        });
+
     console.log("Upload Error:", uploadError);
 
-if (uploadError) {
-    return res.status(500).json({
-        success: false,
-        message: uploadError.message
-    });
-}
+    if (uploadError) {
+        return res.status(500).json({
+            success: false,
+            message: uploadError.message
+        });
+    }
 
-const { data: publicUrl } = supabase.storage
-    .from("receipts")
-    .getPublicUrl(fileName);
+    const { data: publicUrl } = supabase.storage
+        .from("receipts")
+        .getPublicUrl(fileName);
+
     console.log("Receipt URL:", publicUrl.publicUrl);
 
-const receipt_url = publicUrl.publicUrl;
+    const receipt_url = publicUrl.publicUrl;
 
     if (!user_id || !amount || !receipt_url) {
         return res.status(400).json({
@@ -968,46 +1011,45 @@ const receipt_url = publicUrl.publicUrl;
     }
 
     const { data, error } = await supabase
-    .from("deposits")
-    .insert([{
-        user_id,
-        amount,
-        receipt_url,
-        status: "Pending"
-    }])
-    .select();
+        .from("deposits")
+        .insert([{
+            user_id,
+            amount,
+            receipt_url,
+            status: "Pending"
+        }])
+        .select();
 
-if (error) {
-    console.log("Deposit Error:", error);
-}
+    if (error) {
+        console.log("Deposit Error:", error);
+    }
 
-if (error) {
-    return res.status(500).json({
-        success: false,
-        message: error.message
+    if (error) {
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+
+    const { error: transactionError } = await supabase
+        .from("transactions")
+        .insert([{
+            user_id,
+            type: "Deposit",
+            amount,
+            status: "Pending",
+            description: "Bitcoin Deposit"
+        }]);
+
+    if (transactionError) {
+        console.log("Transaction Error:", transactionError);
+    }
+
+    res.json({
+        success: true,
+        message: "Deposit submitted successfully.",
+        deposit: data
     });
-}
-
-// Save to transaction history
-const { error: transactionError } = await supabase
-    .from("transactions")
-    .insert([{
-        user_id,
-        type: "Deposit",
-        amount,
-        status: "Pending",
-        description: "Bitcoin Deposit"
-    }]);
-
-if (transactionError) {
-    console.log("Transaction Error:", transactionError);
-}
-
-res.json({
-    success: true,
-    message: "Deposit submitted successfully.",
-    deposit: data
-});
 
 });
 
@@ -1029,9 +1071,15 @@ app.get("/transactions/:userId", async (req, res) => {
         });
     }
 
+    // Add formatted amount for display
+    const formatted = (data || []).map(t => ({
+        ...t,
+        amount_display: formatMoney(t.amount)
+    }));
+
     res.json({
         success: true,
-        transactions: data
+        transactions: formatted
     });
 
 });
@@ -1042,7 +1090,6 @@ app.put("/admin/withdrawals/:id/approve", async (req, res) => {
 
     const withdrawalId = req.params.id;
 
-    // Get withdrawal
     const { data: withdrawal, error } = await supabase
         .from("withdrawals")
         .select("*")
@@ -1056,7 +1103,6 @@ app.put("/admin/withdrawals/:id/approve", async (req, res) => {
         });
     }
 
-    // Get user balance
     const { data: user } = await supabase
         .from("users")
         .select("balance")
@@ -1066,7 +1112,6 @@ app.put("/admin/withdrawals/:id/approve", async (req, res) => {
     const newBalance =
         Number(user.balance) - Number(withdrawal.amount);
 
-    // Update user balance
     await supabase
         .from("users")
         .update({
@@ -1074,7 +1119,6 @@ app.put("/admin/withdrawals/:id/approve", async (req, res) => {
         })
         .eq("id", withdrawal.user_id);
 
-    // Update withdrawal
     await supabase
         .from("withdrawals")
         .update({
@@ -1082,7 +1126,6 @@ app.put("/admin/withdrawals/:id/approve", async (req, res) => {
         })
         .eq("id", withdrawalId);
 
-    // Update transaction
     await supabase
         .from("transactions")
         .update({
@@ -1118,7 +1161,6 @@ app.put("/admin/withdrawals/:id/reject", async (req, res) => {
         });
     }
 
-    // Update withdrawal
     await supabase
         .from("withdrawals")
         .update({
@@ -1126,7 +1168,6 @@ app.put("/admin/withdrawals/:id/reject", async (req, res) => {
         })
         .eq("id", withdrawalId);
 
-    // Update transaction
     await supabase
         .from("transactions")
         .update({
@@ -1144,7 +1185,7 @@ app.put("/admin/withdrawals/:id/reject", async (req, res) => {
 
 });
 
-/* ---------------- DELETE  WITHDRAWAL MESSAGE ---------------- */
+/* ---------------- DELETE WITHDRAWAL MESSAGE ---------------- */
 
 app.delete("/admin/withdrawals/:id", async (req, res) => {
 
@@ -1163,7 +1204,6 @@ app.delete("/admin/withdrawals/:id", async (req, res) => {
         });
     }
 
-    // ✅ ONLY delete withdrawal (safe)
     const { error: deleteError } = await supabase
         .from("withdrawals")
         .delete()
@@ -1187,7 +1227,6 @@ app.delete("/admin/withdrawals/:id", async (req, res) => {
 
 app.get("/admin/deposits", async (req, res) => {
 
-    // Get all deposits
     const { data: deposits, error } = await supabase
         .from("deposits")
         .select("*")
@@ -1200,7 +1239,6 @@ app.get("/admin/deposits", async (req, res) => {
         });
     }
 
-    // Attach user details manually
     for (const deposit of deposits) {
 
         const { data: user } = await supabase
@@ -1210,6 +1248,7 @@ app.get("/admin/deposits", async (req, res) => {
             .single();
 
         deposit.users = user;
+        deposit.amount_display = formatMoney(deposit.amount);
 
     }
 
@@ -1247,24 +1286,24 @@ app.put("/admin/deposits/:id/approve", async (req, res) => {
     }
 
     const { data: user } = await supabase
-    .from("users")
-    .select("balance, btc_balance")
-    .eq("id", deposit.user_id)
-    .single();
+        .from("users")
+        .select("balance, btc_balance")
+        .eq("id", deposit.user_id)
+        .single();
 
-const newBalance =
-    Number(user.balance) + Number(deposit.amount);
+    const newBalance =
+        Number(user.balance) + Number(deposit.amount);
 
-const newBtcBalance =
-    Number(user.btc_balance) + Number(deposit.amount);
+    const newBtcBalance =
+        Number(user.btc_balance) + Number(deposit.amount);
 
-await supabase
-    .from("users")
-    .update({
-        balance: newBalance,
-        btc_balance: newBtcBalance
-    })
-    .eq("id", deposit.user_id);
+    await supabase
+        .from("users")
+        .update({
+            balance: newBalance,
+            btc_balance: newBtcBalance
+        })
+        .eq("id", deposit.user_id);
 
     await supabase
         .from("deposits")
@@ -1295,86 +1334,70 @@ app.put("/admin/deposits/:id/reject", async (req, res) => {
 
     const depositId = req.params.id;
 
-
     const { data: deposit, error } = await supabase
         .from("deposits")
         .select("*")
         .eq("id", depositId)
         .single();
 
-
     if (error || !deposit) {
         return res.status(404).json({
-            success:false,
-            message:"Deposit not found."
+            success: false,
+            message: "Deposit not found."
         });
     }
-
 
     if (deposit.status === "Rejected") {
         return res.status(400).json({
-            success:false,
-            message:"Deposit has already been rejected."
+            success: false,
+            message: "Deposit has already been rejected."
         });
     }
-
 
     await supabase
         .from("deposits")
         .update({
-            status:"Rejected"
+            status: "Rejected"
         })
         .eq("id", depositId);
-
-
 
     await supabase
         .from("transactions")
         .update({
-            status:"Rejected"
+            status: "Rejected"
         })
         .eq("user_id", deposit.user_id)
-        .eq("type","Deposit")
-        .eq("status","Pending");
-
-
+        .eq("type", "Deposit")
+        .eq("status", "Pending");
 
     res.json({
-        success:true,
-        message:"Deposit rejected successfully."
+        success: true,
+        message: "Deposit rejected successfully."
     });
-
 
 });
 
 /* ---------------- ADMIN NOTIFICATIONS ---------------- */
 
-app.get("/admin/notifications", async(req,res)=>{
+app.get("/admin/notifications", async (req, res) => {
 
-const {count: deposits} = await supabase
-.from("deposits")
-.select("*",{count:"exact",head:true})
-.eq("status","Pending");
+    const { count: deposits } = await supabase
+        .from("deposits")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "Pending");
 
+    const { count: withdrawals } = await supabase
+        .from("withdrawals")
+        .select("*", { count: "exact", head: true })
+        .eq("status", "Pending");
 
-const {count: withdrawals} = await supabase
-.from("withdrawals")
-.select("*",{count:"exact",head:true})
-.eq("status","Pending");
-
-
-res.json({
-
-success:true,
-
-pendingDeposits: deposits || 0,
-
-pendingWithdrawals: withdrawals || 0
+    res.json({
+        success: true,
+        pendingDeposits: deposits || 0,
+        pendingWithdrawals: withdrawals || 0
+    });
 
 });
-
-});
-
 
 /* ---------------- SUPPORT CHAT ---------------- */
 
@@ -1402,7 +1425,6 @@ app.get("/support/messages/:userId", async (req, res) => {
     });
 
 });
-
 
 // Send a support message
 app.post("/support/messages", async (req, res) => {
@@ -1443,7 +1465,6 @@ app.post("/support/messages", async (req, res) => {
 
 });
 
-
 /* ---------------- BTC DEPOSIT ADDRESS ---------------- */
 
 // Get current BTC deposit address
@@ -1468,7 +1489,6 @@ app.get("/settings/btc-address", async (req, res) => {
     });
 
 });
-
 
 // Admin update BTC deposit address
 app.put("/admin/settings/btc-address", async (req, res) => {
@@ -1520,7 +1540,6 @@ app.put("/admin/settings/btc-address", async (req, res) => {
 
 });
 
-
 /* ---------------- ADMIN GET ALL CHAT USERS ---------------- */
 
 app.get("/admin/support/users", async (req, res) => {
@@ -1542,7 +1561,6 @@ app.get("/admin/support/users", async (req, res) => {
         });
     }
 
-    // Get unique users who have messages
     const uniqueUsers = [];
 
     for (const msg of data) {
@@ -1559,7 +1577,6 @@ app.get("/admin/support/users", async (req, res) => {
     });
 
 });
-
 
 /* ---------------- ADMIN GET USER CHAT ---------------- */
 
@@ -1587,9 +1604,6 @@ app.get("/admin/support/messages/:userId", async (req, res) => {
 
 });
 
-
-
-
 /* ---------------- ADMIN UNREAD CHAT COUNT ---------------- */
 
 app.get("/admin/support/unread", async (req, res) => {
@@ -1616,7 +1630,6 @@ app.get("/admin/support/unread", async (req, res) => {
     });
 
 });
-
 
 /* ---------------- MARK USER MESSAGES AS READ ---------------- */
 
@@ -1676,7 +1689,6 @@ app.get("/admin/support/messages", async (req, res) => {
 
         }
 
-        // Remove duplicate user IDs
         const userIds = [
             ...new Set(
                 (data || []).map(
@@ -1790,7 +1802,6 @@ app.get("/chat/notification/:userId", async (req, res) => {
             });
         }
 
-        // No messages yet
         if (!data || data.length === 0) {
 
             return res.json({
@@ -1802,7 +1813,6 @@ app.get("/chat/notification/:userId", async (req, res) => {
 
         const latestMessage = data[0];
 
-        // Latest message came from admin
         if (latestMessage.sender === "admin") {
 
             return res.json({
@@ -1812,7 +1822,6 @@ app.get("/chat/notification/:userId", async (req, res) => {
 
         }
 
-        // Latest message came from user
         return res.json({
             success: true,
             unread: false
@@ -1833,8 +1842,6 @@ app.get("/chat/notification/:userId", async (req, res) => {
     }
 
 });
-
-
 
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {

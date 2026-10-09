@@ -346,16 +346,16 @@ app.get("/user/:id", async (req, res) => {
         });
     }
 
-    // Overwrite numeric fields with comma-formatted strings for display
+    // ✅ Raw values preserved, formatted values added separately
     const formattedUser = {
         ...data,
-        balance:       formatMoney(data.balance),
-        total_trade:   formatMoney(data.total_trade),
-        assets:        formatMoney(data.assets),
-        active_assets: formatMoney(data.active_assets),
-        btc_balance:   formatMoney(data.btc_balance),
-        eth_balance:   formatMoney(data.eth_balance),
-        usdt_balance:  formatMoney(data.usdt_balance)
+        balance_display:       formatMoney(data.balance),
+        total_trade_display:   formatMoney(data.total_trade),
+        assets_display:        formatMoney(data.assets),
+        active_assets_display: formatMoney(data.active_assets),
+        btc_balance_display:   formatMoney(data.btc_balance),
+        eth_balance_display:   formatMoney(data.eth_balance),
+        usdt_balance_display:  formatMoney(data.usdt_balance)
     };
 
     res.json({
@@ -709,10 +709,10 @@ app.get("/admin/withdrawals", async (req, res) => {
         });
     }
 
-    // Overwrite amount with formatted string for display
+    // Keep raw amount, add display field
     const formatted = (data || []).map(w => ({
         ...w,
-        amount: formatMoney(w.amount)
+        amount_display: formatMoney(w.amount)
     }));
 
     res.json({
@@ -775,16 +775,16 @@ app.get("/admin/user/:id", async (req, res) => {
         });
     }
 
-    // Overwrite numeric fields with comma-formatted strings for display
+    // Keep raw values, add display fields
     const formattedUser = {
         ...data,
-        balance:       formatMoney(data.balance),
-        total_trade:   formatMoney(data.total_trade),
-        assets:        formatMoney(data.assets),
-        active_assets: formatMoney(data.active_assets),
-        btc_balance:   formatMoney(data.btc_balance),
-        eth_balance:   formatMoney(data.eth_balance),
-        usdt_balance:  formatMoney(data.usdt_balance)
+        balance_display:       formatMoney(data.balance),
+        total_trade_display:   formatMoney(data.total_trade),
+        assets_display:        formatMoney(data.assets),
+        active_assets_display: formatMoney(data.active_assets),
+        btc_balance_display:   formatMoney(data.btc_balance),
+        eth_balance_display:   formatMoney(data.eth_balance),
+        usdt_balance_display:  formatMoney(data.usdt_balance)
     };
 
     return res.json({
@@ -891,16 +891,16 @@ app.get("/admin/users", async (req, res) => {
         });
     }
 
-    // Overwrite numeric fields with comma-formatted strings for display
+    // Keep raw values, add display fields
     const usersWithDisplay = (data || []).map(u => ({
         ...u,
-        balance:       formatMoney(u.balance),
-        total_trade:   formatMoney(u.total_trade),
-        assets:        formatMoney(u.assets),
-        active_assets: formatMoney(u.active_assets),
-        btc_balance:   formatMoney(u.btc_balance),
-        eth_balance:   formatMoney(u.eth_balance),
-        usdt_balance:  formatMoney(u.usdt_balance)
+        balance_display:       formatMoney(u.balance),
+        total_trade_display:   formatMoney(u.total_trade),
+        assets_display:        formatMoney(u.assets),
+        active_assets_display: formatMoney(u.active_assets),
+        btc_balance_display:   formatMoney(u.btc_balance),
+        eth_balance_display:   formatMoney(u.eth_balance),
+        usdt_balance_display:  formatMoney(u.usdt_balance)
     }));
 
     res.json({
@@ -1071,10 +1071,10 @@ app.get("/transactions/:userId", async (req, res) => {
         });
     }
 
-    // Overwrite amount with formatted string for display
+    // Keep raw amount, add display field
     const formatted = (data || []).map(t => ({
         ...t,
-        amount: formatMoney(t.amount)
+        amount_display: formatMoney(t.amount)
     }));
 
     res.json({
@@ -1248,7 +1248,7 @@ app.get("/admin/deposits", async (req, res) => {
             .single();
 
         deposit.users = user;
-        deposit.amount = formatMoney(deposit.amount);
+        deposit.amount_display = formatMoney(deposit.amount);
 
     }
 

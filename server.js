@@ -845,10 +845,31 @@ app.put("/admin/user/:id", async (req, res) => {
 
     console.log("BTC received:", btc_balance);
 
+    // ★ FIX: Fetch the user's CURRENT balance first so we can compute the difference
+    const { data: existingUser, error: fetchError } = await supabase
+        .from("users")
+        .select("balance")
+        .eq("id", userId)
+        .single();
+
+    if (fetchError || !existingUser) {
+        return res.status(404).json({
+            success: false,
+            message: "User not found."
+        });
+    }
+
+    const oldBalance = Number(existingUser.balance || 0);
+    const newBalance = cleanNumber(balance);
+    const numericNewBalance = Number(newBalance || 0);
+
+    // ★ FIX: Only log a transaction if the balance actually changed
+    const difference = numericNewBalance - oldBalance;
+
     const { data, error } = await supabase
         .from("users")
         .update({
-            balance:       cleanNumber(balance),
+            balance:       newBalance,
             total_trade:   cleanNumber(total_trade),
             assets:        cleanNumber(assets),
             active_assets: cleanNumber(active_assets),
@@ -865,6 +886,29 @@ app.put("/admin/user/:id", async (req, res) => {
             success: false,
             message: error.message
         });
+    }
+
+    // ★ FIX: Write a transaction history entry
+    if (difference !== 0) {
+        const isCredit = difference > 0;
+        const absoluteAmount = Math.abs(difference);
+
+        const { error: txnError } = await supabase
+            .from("transactions")
+            .insert([{
+                user_id: userId,
+                type: isCredit ? "Deposit" : "Withdrawal",
+                amount: absoluteAmount,
+                status: "Approved",        // admin actions are pre-approved
+                description: isCredit
+                    ? "Account credit by admin"
+                    : "Account adjustment by admin"
+            }]);
+
+        if (txnError) {
+            console.log("Transaction log error:", txnError);
+            // Don't fail the whole request — the balance was still updated
+        }
     }
 
     res.json({

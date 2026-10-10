@@ -505,6 +505,39 @@ app.post("/withdraw/create", async (req, res) => {
         });
     }
 
+    /* ★ FIX: Validate amount is a real positive number */
+    const numericAmount = Number(String(amount).replace(/,/g, "").trim());
+
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid withdrawal amount."
+        });
+    }
+
+    /* ★ FIX: Check user actually has enough balance */
+    const { data: balanceCheck, error: balErr } = await supabase
+        .from("users")
+        .select("balance")
+        .eq("id", user_id)
+        .single();
+
+    if (balErr || !balanceCheck) {
+        return res.status(404).json({
+            success: false,
+            message: "User not found."
+        });
+    }
+
+    const userBalance = Number(balanceCheck.balance || 0);
+
+    if (numericAmount > userBalance) {
+        return res.status(400).json({
+            success: false,
+            message: `Insufficient balance. You have $${userBalance.toFixed(2)} available.`
+        });
+    }
+
     const savedCode = verificationCodes[email];
 
     if (!savedCode) {
@@ -530,7 +563,8 @@ app.post("/withdraw/create", async (req, res) => {
         });
     }
 
-    const cleanAmount = cleanNumber(amount);
+    /* ★ FIX: Use the already-validated numeric amount */
+    const cleanAmount = numericAmount;
 
     const { data, error } = await supabase
         .from("withdrawals")
@@ -976,6 +1010,15 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
         });
     }
 
+    /* ★ FIX: Validate deposit amount upfront */
+    const numericAmount = Number(String(amount || "").replace(/,/g, "").trim());
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+        return res.status(400).json({
+            success: false,
+            message: "Invalid deposit amount."
+        });
+    }
+
     const fileName = `${Date.now()}-${req.file.originalname}`;
 
     const { error: uploadError } = await supabase.storage
@@ -1008,7 +1051,8 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
         });
     }
 
-    const cleanAmount = cleanNumber(amount);
+    /* ★ FIX: Use the already-validated numeric amount */
+    const cleanAmount = numericAmount;
 
     const { data, error } = await supabase
         .from("deposits")

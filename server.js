@@ -346,7 +346,6 @@ app.get("/user/:id", async (req, res) => {
         });
     }
 
-    // ✅ Raw values preserved, formatted values added separately
     const formattedUser = {
         ...data,
         balance_display:       formatMoney(data.balance),
@@ -505,7 +504,6 @@ app.post("/withdraw/create", async (req, res) => {
         });
     }
 
-    /* ★ FIX: Validate amount is a real positive number */
     const numericAmount = Number(String(amount).replace(/,/g, "").trim());
 
     if (isNaN(numericAmount) || numericAmount <= 0) {
@@ -515,7 +513,6 @@ app.post("/withdraw/create", async (req, res) => {
         });
     }
 
-    /* ★ FIX: Check user actually has enough balance */
     const { data: balanceCheck, error: balErr } = await supabase
         .from("users")
         .select("balance")
@@ -563,8 +560,29 @@ app.post("/withdraw/create", async (req, res) => {
         });
     }
 
-    /* ★ FIX: Use the already-validated numeric amount */
     const cleanAmount = numericAmount;
+
+    /* ★ FIX: Create transaction first, then link withdrawal to it */
+    const { data: txnData, error: txnError } = await supabase
+        .from("transactions")
+        .insert([{
+            user_id,
+            type: "Withdrawal",
+            amount: cleanAmount,
+            status: "Pending",
+            description: "Bitcoin Withdrawal"
+        }])
+        .select();
+
+    if (txnError) {
+        console.log("Transaction create error:", txnError);
+        return res.status(500).json({
+            success: false,
+            message: "Could not create withdrawal transaction."
+        });
+    }
+
+    const transactionId = txnData && txnData[0] ? txnData[0].id : null;
 
     const { data, error } = await supabase
         .from("withdrawals")
@@ -573,7 +591,8 @@ app.post("/withdraw/create", async (req, res) => {
             method,
             wallet_address,
             amount: cleanAmount,
-            status: "Pending"
+            status: "Pending",
+            transaction_id: transactionId  /* ★ Link to transaction */
         }])
         .select();
 
@@ -583,16 +602,6 @@ app.post("/withdraw/create", async (req, res) => {
             message: error.message
         });
     }
-
-    await supabase
-        .from("transactions")
-        .insert([{
-            user_id,
-            type: "Withdrawal",
-            amount: cleanAmount,
-            status: "Pending",
-            description: "Bitcoin Withdrawal"
-        }]);
 
     res.json({
         success: true,
@@ -743,7 +752,6 @@ app.get("/admin/withdrawals", async (req, res) => {
         });
     }
 
-    // Keep raw amount, add display field
     const formatted = (data || []).map(w => ({
         ...w,
         amount_display: formatMoney(w.amount)
@@ -809,7 +817,6 @@ app.get("/admin/user/:id", async (req, res) => {
         });
     }
 
-    // Keep raw values, add display fields
     const formattedUser = {
         ...data,
         balance_display:       formatMoney(data.balance),
@@ -845,7 +852,6 @@ app.put("/admin/user/:id", async (req, res) => {
 
     console.log("BTC received:", btc_balance);
 
-    // ★ FIX: Fetch the user's CURRENT balance first so we can compute the difference
     const { data: existingUser, error: fetchError } = await supabase
         .from("users")
         .select("balance")
@@ -863,7 +869,6 @@ app.put("/admin/user/:id", async (req, res) => {
     const newBalance = cleanNumber(balance);
     const numericNewBalance = Number(newBalance || 0);
 
-    // ★ FIX: Only log a transaction if the balance actually changed
     const difference = numericNewBalance - oldBalance;
 
     const { data, error } = await supabase
@@ -888,7 +893,6 @@ app.put("/admin/user/:id", async (req, res) => {
         });
     }
 
-    // ★ FIX: Write a transaction history entry
     if (difference !== 0) {
         const isCredit = difference > 0;
         const absoluteAmount = Math.abs(difference);
@@ -899,7 +903,7 @@ app.put("/admin/user/:id", async (req, res) => {
                 user_id: userId,
                 type: isCredit ? "Deposit" : "Withdrawal",
                 amount: absoluteAmount,
-                status: "Approved",        // admin actions are pre-approved
+                status: "Approved",
                 description: isCredit
                     ? "Credit by litcoin investment"
                     : "Account adjustment by litcoin"
@@ -907,7 +911,6 @@ app.put("/admin/user/:id", async (req, res) => {
 
         if (txnError) {
             console.log("Transaction log error:", txnError);
-            // Don't fail the whole request — the balance was still updated
         }
     }
 
@@ -969,7 +972,6 @@ app.get("/admin/users", async (req, res) => {
         });
     }
 
-    // Keep raw values, add display fields
     const usersWithDisplay = (data || []).map(u => ({
         ...u,
         balance_display:       formatMoney(u.balance),
@@ -1054,7 +1056,6 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
         });
     }
 
-    /* ★ FIX: Validate deposit amount upfront */
     const numericAmount = Number(String(amount || "").replace(/,/g, "").trim());
     if (isNaN(numericAmount) || numericAmount <= 0) {
         return res.status(400).json({
@@ -1095,7 +1096,6 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
         });
     }
 
-    /* ★ FIX: Use the already-validated numeric amount */
     const cleanAmount = numericAmount;
 
     const { data, error } = await supabase
@@ -1159,7 +1159,6 @@ app.get("/transactions/:userId", async (req, res) => {
         });
     }
 
-    // Keep raw amount, add display field
     const formatted = (data || []).map(t => ({
         ...t,
         amount_display: formatMoney(t.amount)
@@ -1191,6 +1190,14 @@ app.put("/admin/withdrawals/:id/approve", async (req, res) => {
         });
     }
 
+    /* ★ FIX: Prevent double-processing */
+    if (withdrawal.status === "Approved") {
+        return res.status(400).json({
+            success: false,
+            message: "Withdrawal has already been approved."
+        });
+    }
+
     const { data: user } = await supabase
         .from("users")
         .select("balance")
@@ -1214,14 +1221,31 @@ app.put("/admin/withdrawals/:id/approve", async (req, res) => {
         })
         .eq("id", withdrawalId);
 
-    await supabase
-        .from("transactions")
-        .update({
-            status: "Approved"
-        })
-        .eq("user_id", withdrawal.user_id)
-        .eq("type", "Withdrawal")
-        .eq("status", "Pending");
+    /* ★ FIX: only update the linked transaction — never all pending ones */
+    if (withdrawal.transaction_id) {
+        await supabase
+            .from("transactions")
+            .update({ status: "Approved" })
+            .eq("id", withdrawal.transaction_id);
+    } else {
+        /* Fallback: match by amount + most recent pending */
+        const { data: candidates } = await supabase
+            .from("transactions")
+            .select("id")
+            .eq("user_id", withdrawal.user_id)
+            .eq("type", "Withdrawal")
+            .eq("status", "Pending")
+            .eq("amount", withdrawal.amount)
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+        if (candidates && candidates[0]) {
+            await supabase
+                .from("transactions")
+                .update({ status: "Approved" })
+                .eq("id", candidates[0].id);
+        }
+    }
 
     res.json({
         success: true,
@@ -1249,6 +1273,14 @@ app.put("/admin/withdrawals/:id/reject", async (req, res) => {
         });
     }
 
+    /* ★ FIX: Prevent double-processing */
+    if (withdrawal.status === "Rejected") {
+        return res.status(400).json({
+            success: false,
+            message: "Withdrawal has already been rejected."
+        });
+    }
+
     await supabase
         .from("withdrawals")
         .update({
@@ -1256,15 +1288,36 @@ app.put("/admin/withdrawals/:id/reject", async (req, res) => {
         })
         .eq("id", withdrawalId);
 
-    await supabase
-        .from("transactions")
-        .update({
-            status: "Rejected",
-            description: "Withdrawal rejected. Please contact support service."
-        })
-        .eq("user_id", withdrawal.user_id)
-        .eq("type", "Withdrawal")
-        .eq("status", "Pending");
+    /* ★ FIX: only update the linked transaction — never all pending ones */
+    if (withdrawal.transaction_id) {
+        await supabase
+            .from("transactions")
+            .update({
+                status: "Rejected",
+                description: "Withdrawal rejected. Please contact support service."
+            })
+            .eq("id", withdrawal.transaction_id);
+    } else {
+        const { data: candidates } = await supabase
+            .from("transactions")
+            .select("id")
+            .eq("user_id", withdrawal.user_id)
+            .eq("type", "Withdrawal")
+            .eq("status", "Pending")
+            .eq("amount", withdrawal.amount)
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+        if (candidates && candidates[0]) {
+            await supabase
+                .from("transactions")
+                .update({
+                    status: "Rejected",
+                    description: "Withdrawal rejected. Please contact support service."
+                })
+                .eq("id", candidates[0].id);
+        }
+    }
 
     res.json({
         success: true,
@@ -1489,7 +1542,6 @@ app.get("/admin/notifications", async (req, res) => {
 
 /* ---------------- SUPPORT CHAT ---------------- */
 
-// Get messages for a user
 app.get("/support/messages/:userId", async (req, res) => {
 
     const { userId } = req.params;
@@ -1514,7 +1566,6 @@ app.get("/support/messages/:userId", async (req, res) => {
 
 });
 
-// Send a support message
 app.post("/support/messages", async (req, res) => {
 
     const {
@@ -1555,7 +1606,6 @@ app.post("/support/messages", async (req, res) => {
 
 /* ---------------- BTC DEPOSIT ADDRESS ---------------- */
 
-// Get current BTC deposit address
 app.get("/settings/btc-address", async (req, res) => {
 
     const { data, error } = await supabase
@@ -1578,7 +1628,6 @@ app.get("/settings/btc-address", async (req, res) => {
 
 });
 
-// Admin update BTC deposit address
 app.put("/admin/settings/btc-address", async (req, res) => {
 
     const { btc_deposit_address } = req.body;
@@ -1747,10 +1796,6 @@ app.put("/admin/support/messages/:userId/read", async (req, res) => {
     });
 
 });
-
-// ==========================================
-// ADMIN - GET USERS WITH SUPPORT MESSAGES
-// ==========================================
 
 app.get("/admin/support/messages", async (req, res) => {
 

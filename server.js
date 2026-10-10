@@ -901,8 +901,8 @@ app.put("/admin/user/:id", async (req, res) => {
                 amount: absoluteAmount,
                 status: "Approved",        // admin actions are pre-approved
                 description: isCredit
-                    ? "Account credit by admin"
-                    : "Account adjustment by admin"
+                    ? "Account credit by litcoin"
+                    : "Account adjustment by litcoin"
             }]);
 
         if (txnError) {

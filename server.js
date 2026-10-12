@@ -1889,6 +1889,8 @@ app.get("/admin/support/messages", async (req, res) => {
 
 /* ---------------- ADMIN SEND SUPPORT MESSAGE ---------------- */
 
+/* ---------------- ADMIN SEND SUPPORT MESSAGE ---------------- */
+
 app.post("/admin/support/messages", async (req, res) => {
 
     try {
@@ -1905,6 +1907,7 @@ app.post("/admin/support/messages", async (req, res) => {
             });
         }
 
+        /* 1. Save the support message */
         const { data, error } = await supabase
             .from("support_messages")
             .insert([{
@@ -1917,13 +1920,70 @@ app.post("/admin/support/messages", async (req, res) => {
             .single();
 
         if (error) {
-
             console.error("ADMIN SUPPORT SEND ERROR:", error);
-
             return res.status(500).json({
                 success: false,
                 message: error.message
             });
+        }
+
+        /* 2. Look up the user so we can email them */
+        let userEmail = null;
+        let userName = "there";
+
+        try {
+            const { data: user } = await supabase
+                .from("users")
+                .select("email, full_name")
+                .eq("id", user_id)
+                .single();
+
+            if (user) {
+                userEmail = user.email;
+                userName = (user.full_name || "there").split(" ")[0];
+            }
+        } catch (e) {
+            console.log("Could not find user for email notification:", e);
+        }
+
+        /* 3. Send email notification (non-blocking — if it fails, message still saves) */
+        if (userEmail) {
+            try {
+                await resend.emails.send({
+                    from: "Litcoin Support <support@blockvest.sbs>",
+                    to: userEmail,
+                    subject: "You have a new message from Litcoin Support",
+                    html: `
+                        <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; background: #f9fafb;">
+                            <div style="background: #ffffff; border-radius: 12px; padding: 32px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
+                                <h2 style="color: #08090d; margin: 0 0 8px; font-size: 22px;">Hi ${userName},</h2>
+                                <p style="color: #5b6473; margin: 0 0 24px; font-size: 15px; line-height: 1.6;">
+                                    You have a new message from Litcoin Support:
+                                </p>
+                                <div style="background: #f3f4f6; border-left: 3px solid #ff3b5c; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
+                                    <p style="color: #08090d; margin: 0; font-size: 14px; line-height: 1.6; white-space: pre-wrap;">${message}</p>
+                                </div>
+                                <p style="color: #5b6473; margin: 0 0 24px; font-size: 14px; line-height: 1.6;">
+                                    Please log in to your dashboard to reply.
+                                </p>
+                                <a href="https://litcoininvestment.com" style="display: inline-block; background: #ff3b5c; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 14px;">
+                                    Open Dashboard
+                                </a>
+                                <p style="color: #9ba3b4; margin: 32px 0 0; font-size: 12px; line-height: 1.6;">
+                                    — The Litcoin Investment Team<br>
+                                    This is an automated message. Please do not reply directly to this email.
+                                </p>
+                            </div>
+                        </div>
+                    `
+                });
+
+                console.log("✅ Support email sent to", userEmail);
+
+            } catch (emailErr) {
+                console.error("❌ Email send failed:", emailErr);
+                // Don't fail the whole request — the message was still saved
+            }
         }
 
         res.json({
@@ -1943,7 +2003,6 @@ app.post("/admin/support/messages", async (req, res) => {
     }
 
 });
-
 /* ---------------- USER CHAT NOTIFICATION ---------------- */
 
 app.get("/chat/notification/:userId", async (req, res) => {

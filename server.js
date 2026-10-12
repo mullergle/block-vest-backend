@@ -562,7 +562,7 @@ app.post("/withdraw/create", async (req, res) => {
 
     const cleanAmount = numericAmount;
 
-    /* ★ FIX: Create transaction first, then link withdrawal to it */
+    /* ★ Create transaction first so we can link it */
     const { data: txnData, error: txnError } = await supabase
         .from("transactions")
         .insert([{
@@ -592,7 +592,7 @@ app.post("/withdraw/create", async (req, res) => {
             wallet_address,
             amount: cleanAmount,
             status: "Pending",
-            transaction_id: transactionId  /* ★ Link to transaction */
+            transaction_id: transactionId
         }])
         .select();
 
@@ -1098,28 +1098,8 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
 
     const cleanAmount = numericAmount;
 
-    const { data, error } = await supabase
-        .from("deposits")
-        .insert([{
-            user_id,
-            amount: cleanAmount,
-            receipt_url,
-            status: "Pending"
-        }])
-        .select();
-
-    if (error) {
-        console.log("Deposit Error:", error);
-    }
-
-    if (error) {
-        return res.status(500).json({
-            success: false,
-            message: error.message
-        });
-    }
-
-    const { error: transactionError } = await supabase
+    /* ★ FIX: Create transaction first so we can link it */
+    const { data: txnData, error: transactionError } = await supabase
         .from("transactions")
         .insert([{
             user_id,
@@ -1127,10 +1107,37 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
             amount: cleanAmount,
             status: "Pending",
             description: "Bitcoin Deposit"
-        }]);
+        }])
+        .select();
 
     if (transactionError) {
         console.log("Transaction Error:", transactionError);
+        return res.status(500).json({
+            success: false,
+            message: "Could not create deposit transaction."
+        });
+    }
+
+    const transactionId = txnData && txnData[0] ? txnData[0].id : null;
+
+    /* ★ FIX: Create deposit and link it to the transaction */
+    const { data, error } = await supabase
+        .from("deposits")
+        .insert([{
+            user_id,
+            amount: cleanAmount,
+            receipt_url,
+            status: "Pending",
+            transaction_id: transactionId
+        }])
+        .select();
+
+    if (error) {
+        console.log("Deposit Error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 
     res.json({
@@ -1190,7 +1197,6 @@ app.put("/admin/withdrawals/:id/approve", async (req, res) => {
         });
     }
 
-    /* ★ FIX: Prevent double-processing */
     if (withdrawal.status === "Approved") {
         return res.status(400).json({
             success: false,
@@ -1228,7 +1234,6 @@ app.put("/admin/withdrawals/:id/approve", async (req, res) => {
             .update({ status: "Approved" })
             .eq("id", withdrawal.transaction_id);
     } else {
-        /* Fallback: match by amount + most recent pending */
         const { data: candidates } = await supabase
             .from("transactions")
             .select("id")
@@ -1273,7 +1278,6 @@ app.put("/admin/withdrawals/:id/reject", async (req, res) => {
         });
     }
 
-    /* ★ FIX: Prevent double-processing */
     if (withdrawal.status === "Rejected") {
         return res.status(400).json({
             success: false,
@@ -1419,6 +1423,7 @@ app.put("/admin/deposits/:id/approve", async (req, res) => {
         });
     }
 
+    /* ★ FIX: Prevent double-processing */
     if (deposit.status === "Approved") {
         return res.status(400).json({
             success: false,
@@ -1453,14 +1458,31 @@ app.put("/admin/deposits/:id/approve", async (req, res) => {
         })
         .eq("id", depositId);
 
-    await supabase
-        .from("transactions")
-        .update({
-            status: "Approved"
-        })
-        .eq("user_id", deposit.user_id)
-        .eq("type", "Deposit")
-        .eq("status", "Pending");
+    /* ★ FIX: only update the linked transaction — never all pending ones */
+    if (deposit.transaction_id) {
+        await supabase
+            .from("transactions")
+            .update({ status: "Approved" })
+            .eq("id", deposit.transaction_id);
+    } else {
+        /* Fallback: match by amount + most recent pending */
+        const { data: candidates } = await supabase
+            .from("transactions")
+            .select("id")
+            .eq("user_id", deposit.user_id)
+            .eq("type", "Deposit")
+            .eq("status", "Pending")
+            .eq("amount", deposit.amount)
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+        if (candidates && candidates[0]) {
+            await supabase
+                .from("transactions")
+                .update({ status: "Approved" })
+                .eq("id", candidates[0].id);
+        }
+    }
 
     res.json({
         success: true,
@@ -1488,6 +1510,7 @@ app.put("/admin/deposits/:id/reject", async (req, res) => {
         });
     }
 
+    /* ★ FIX: Prevent double-processing */
     if (deposit.status === "Rejected") {
         return res.status(400).json({
             success: false,
@@ -1502,14 +1525,30 @@ app.put("/admin/deposits/:id/reject", async (req, res) => {
         })
         .eq("id", depositId);
 
-    await supabase
-        .from("transactions")
-        .update({
-            status: "Rejected"
-        })
-        .eq("user_id", deposit.user_id)
-        .eq("type", "Deposit")
-        .eq("status", "Pending");
+    /* ★ FIX: only update the linked transaction — never all pending ones */
+    if (deposit.transaction_id) {
+        await supabase
+            .from("transactions")
+            .update({ status: "Rejected" })
+            .eq("id", deposit.transaction_id);
+    } else {
+        const { data: candidates } = await supabase
+            .from("transactions")
+            .select("id")
+            .eq("user_id", deposit.user_id)
+            .eq("type", "Deposit")
+            .eq("status", "Pending")
+            .eq("amount", deposit.amount)
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+        if (candidates && candidates[0]) {
+            await supabase
+                .from("transactions")
+                .update({ status: "Rejected" })
+                .eq("id", candidates[0].id);
+        }
+    }
 
     res.json({
         success: true,

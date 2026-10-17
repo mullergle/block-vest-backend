@@ -123,7 +123,7 @@ app.post("/signup/send-code", async (req, res) => {
     }
 });
 
-/* ---------------- SIGNUP: VERIFY ---------------- */
+/* ---------------- SIGNUP: VERIFY (SMART TOKEN GENERATION) ---------------- */
 app.post("/signup/verify", async (req, res) => {
     const { email, code } = req.body;
 
@@ -146,6 +146,7 @@ app.post("/signup/verify", async (req, res) => {
         return res.status(401).json({ success: false, message: "Invalid verification code." });
     }
 
+    // Mark user as verified
     const { error: updateError } = await supabase
         .from("users")
         .update({ is_verified: true })
@@ -155,10 +156,25 @@ app.post("/signup/verify", async (req, res) => {
         return res.status(500).json({ success: false, message: "Failed to verify user." });
     }
 
-    // DO NOT DELETE THE CODE YET! 
-    // We need it for the reset password step to confirm they actually verified.
+    // 💥 SMART TOKEN GENERATION
+    // We generate a secure, random token and save it to the database.
+    // The frontend will use this token on the next page instead of the email!
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
 
-    res.json({ success: true, message: "Email verified successfully." });
+    await supabase
+        .from("password_resets")
+        .update({ 
+            token: resetToken,
+            token_expires_at: tokenExpiresAt 
+        })
+        .eq("email", email);
+
+    res.json({ 
+        success: true, 
+        message: "Email verified successfully.",
+        reset_token: resetToken // <--- Send token to frontend
+    });
 });
 
 /* ---------------- SIGNUP (DIRECT) ---------------- */
@@ -341,37 +357,51 @@ app.post("/verify-code", async (req, res) => {
         return res.status(401).json({ success: false, message: "Invalid verification code." });
     }
 
-    // WE DO NOT DELETE THE CODE HERE. 
-    // It stays in the database so the /reset-password route can verify it exists.
+    // 💥 SMART TOKEN GENERATION
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
-    res.json({ success: true, message: "Verification successful." });
+    await supabase
+        .from("password_resets")
+        .update({ 
+            token: resetToken,
+            token_expires_at: tokenExpiresAt 
+        })
+        .eq("email", email);
+
+    res.json({ 
+        success: true, 
+        message: "Verification successful.",
+        reset_token: resetToken // <--- Send token to frontend
+    });
 });
 
-/* ---------------- RESET PASSWORD (SECURE & DATABASE CHECK) ---------------- */
+/* ---------------- RESET PASSWORD (SMART TOKEN CHECK) ---------------- */
 app.post("/reset-password", async (req, res) => {
-    const { email, password } = req.body;
+    const { email, password, token } = req.body;
 
-    if (!email || !password) {
-        return res.status(400).json({ success: false, message: "Email and password are required." });
+    if (!email || !password || !token) {
+        return res.status(400).json({ success: false, message: "Missing required fields." });
     }
 
-    // 1. Check if there is a valid code in the database for this email (Proof they verified)
+    // Check if the token is valid and unexpired
     const { data: resetData, error: codeErr } = await supabase
         .from("password_resets")
         .select("*")
         .eq("email", email)
+        .eq("token", token) // <--- Checks the smart token
         .single();
 
     if (codeErr || !resetData) {
-        return res.status(403).json({ success: false, message: "Please verify your email first. Code expired or missing." });
+        return res.status(403).json({ success: false, message: "Invalid or expired reset session. Please request a new code." });
     }
 
-    if (new Date() > new Date(resetData.expires_at)) {
+    if (new Date() > new Date(resetData.token_expires_at)) {
         await supabase.from("password_resets").delete().eq("email", email);
-        return res.status(403).json({ success: false, message: "Verification session expired. Please request a new code." });
+        return res.status(403).json({ success: false, message: "Session expired. Please request a new code." });
     }
 
-    // 2. Update the password
+    // Update the password
     const { error: updateError } = await supabase
         .from("users")
         .update({ password: password })
@@ -381,7 +411,7 @@ app.post("/reset-password", async (req, res) => {
         return res.status(500).json({ success: false, message: updateError.message });
     }
 
-    // 3. Delete the code from database now that password is changed
+    // Delete the record so the token can't be reused
     await supabase.from("password_resets").delete().eq("email", email);
 
     res.json({ success: true, message: "Password reset successfully." });

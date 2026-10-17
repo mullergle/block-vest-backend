@@ -9,8 +9,7 @@ const supabase = require("./supabase");
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// Temporary storage for verification codes (Still in memory, but no longer used for pending signups)
-const verificationCodes = {};
+// Temporary storage (Only used for quick checks, no longer used for signup or reset codes)
 const verifiedEmails = {};
 
 const CODE_EXPIRY = 10 * 60 * 1000; // 10 minutes
@@ -67,7 +66,6 @@ app.post("/signup/send-code", async (req, res) => {
         return res.status(400).json({ success: false, message: "Email is required." });
     }
 
-    // Check if user already exists
     const { data: existingUser } = await supabase
         .from("users")
         .select("id")
@@ -78,7 +76,7 @@ app.post("/signup/send-code", async (req, res) => {
         return res.json({ success: false, message: "Email already exists." });
     }
 
-    // 1. Save user to database IMMEDIATELY (set is_verified to false)
+    // Save user to database IMMEDIATELY (unverified)
     const { error: dbError } = await supabase
         .from("users")
         .insert([{ 
@@ -87,7 +85,7 @@ app.post("/signup/send-code", async (req, res) => {
             country, 
             email, 
             password,
-            is_verified: false // Requires the 'is_verified' boolean column in Supabase
+            is_verified: false 
         }]);
 
     if (dbError) {
@@ -95,13 +93,15 @@ app.post("/signup/send-code", async (req, res) => {
         return res.status(500).json({ success: false, message: "Database error: " + dbError.message });
     }
 
-    // 2. Generate code and send email
     const code = crypto.randomInt(100000, 999999).toString();
-    verificationCodes[email] = {
-        code,
-        expires: Date.now() + CODE_EXPIRY,
-        type: "signup"
-    };
+    
+    // Save code to database (using the password_resets table for temporary codes)
+    const expiresAt = new Date(Date.now() + CODE_EXPIRY).toISOString();
+    await supabase.from("password_resets").upsert([{ 
+        email: email, 
+        code: code, 
+        expires_at: expiresAt 
+    }], { onConflict: 'email' });
 
     try {
         const { data, error } = await resend.emails.send({
@@ -132,38 +132,38 @@ app.post("/signup/send-code", async (req, res) => {
 app.post("/signup/verify", async (req, res) => {
     const { email, code } = req.body;
 
-    const savedCode = verificationCodes[email];
+    // Check code in database
+    const { data: resetData, error } = await supabase
+        .from("password_resets")
+        .select("*")
+        .eq("email", email)
+        .single();
 
-    if (!savedCode) {
-        return res.status(401).json({ success: false, message: "Verification code not found. Please request a new one." });
+    if (error || !resetData) {
+        return res.status(401).json({ success: false, message: "Verification code not found or expired." });
     }
 
-    if (savedCode.type !== "signup") {
-        return res.status(401).json({ success: false, message: "Invalid code type." });
-    }
-
-    if (Date.now() > savedCode.expires) {
-        delete verificationCodes[email];
+    if (new Date() > new Date(resetData.expires_at)) {
+        await supabase.from("password_resets").delete().eq("email", email);
         return res.status(401).json({ success: false, message: "Verification code has expired." });
     }
 
-    if (savedCode.code !== code) {
+    if (resetData.code !== code) {
         return res.status(401).json({ success: false, message: "Invalid verification code." });
     }
 
-    // 3. Update the user in the database to verified
+    // Update user to verified
     const { error: updateError } = await supabase
         .from("users")
         .update({ is_verified: true })
         .eq("email", email);
 
     if (updateError) {
-        console.error("❌ DB UPDATE ERROR:", updateError);
-        return res.status(500).json({ success: false, message: "Failed to verify user in database." });
+        return res.status(500).json({ success: false, message: "Failed to verify user." });
     }
 
-    // Clean up the code
-    delete verificationCodes[email];
+    // Clean up code
+    await supabase.from("password_resets").delete().eq("email", email);
 
     res.json({ success: true, message: "Email verified successfully." });
 });
@@ -188,7 +188,7 @@ app.post("/signup", async (req, res) => {
 
     const { data, error } = await supabase
         .from("users")
-        .insert([{ full_name: fullName, phone, country, email, password, is_verified: true }]) // Direct signup assumes verified for testing
+        .insert([{ full_name: fullName, phone, country, email, password, is_verified: true }]) 
         .select();
 
     if (error) {
@@ -217,7 +217,6 @@ app.post("/login", async (req, res) => {
         return res.status(401).json({ success: false, message: "Invalid email or password." });
     }
 
-    // 4. Block login if user is not verified
     if (data.is_verified === false) {
         return res.status(403).json({ success: false, message: "Please verify your email address before logging in." });
     }
@@ -262,7 +261,7 @@ app.get("/user/:id", async (req, res) => {
 });
 
 /* ==========================================================
-   ★ FORGOT PASSWORD
+   ★ FORGOT PASSWORD (DATABASE STORAGE FIX)
 ========================================================== */
 app.post("/forgot-password", async (req, res) => {
     const { email } = req.body;
@@ -282,13 +281,21 @@ app.post("/forgot-password", async (req, res) => {
     }
 
     const code = crypto.randomInt(100000, 999999).toString();
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); 
 
-    // Tag this code so it can ONLY be used for password reset
-    verificationCodes[email] = {
-        code: code,
-        expires: Date.now() + CODE_EXPIRY,
-        type: "password_reset"
-    };
+    // Save to database
+    const { error: dbError } = await supabase
+        .from("password_resets")
+        .upsert([{ 
+            email: email, 
+            code: code, 
+            expires_at: expiresAt 
+        }], { onConflict: 'email' });
+
+    if (dbError) {
+        console.log("DB Error:", dbError);
+        return res.status(500).json({ success: false, message: "Database error." });
+    }
 
     try {
         const { data, error } = await resend.emails.send({
@@ -299,7 +306,7 @@ app.post("/forgot-password", async (req, res) => {
                 <h2>My Investment Verification</h2>
                 <p>Your verification code is:</p>
                 <h1>${code}</h1>
-                <p>This code expires soon. If you didn't request this, ignore this email.</p>
+                <p>This code expires in 10 minutes.</p>
             `
         });
 
@@ -316,34 +323,32 @@ app.post("/forgot-password", async (req, res) => {
 });
 
 /* ---------------- VERIFY CODE ---------------- */
-app.post("/verify-code", (req, res) => {
+app.post("/verify-code", async (req, res) => {
     const { email, code } = req.body;
 
     if (!email || !code) {
         return res.status(400).json({ success: false, message: "Email and code are required." });
     }
 
-    const savedCode = verificationCodes[email];
+    const { data: resetData, error } = await supabase
+        .from("password_resets")
+        .select("*")
+        .eq("email", email)
+        .single();
 
-    if (!savedCode) {
-        return res.status(401).json({ success: false, message: "No verification code found." });
+    if (error || !resetData) {
+        return res.status(401).json({ success: false, message: "No reset request found for this email." });
     }
 
-    // Only allow password reset codes
-    if (savedCode.type !== "password_reset") {
-        return res.status(401).json({ success: false, message: "Invalid code type. Please request a reset code." });
-    }
-
-    if (Date.now() > savedCode.expires) {
-        delete verificationCodes[email];
+    if (new Date() > new Date(resetData.expires_at)) {
+        await supabase.from("password_resets").delete().eq("email", email);
         return res.status(401).json({ success: false, message: "Verification code expired. Request a new one." });
     }
 
-    if (savedCode.code !== code) {
+    if (resetData.code !== code) {
         return res.status(401).json({ success: false, message: "Invalid verification code." });
     }
 
-    // DON'T delete the code yet. We wait until reset-password finishes.
     verifiedEmails[email] = true;
 
     res.json({ success: true, message: "Verification successful." });
@@ -380,9 +385,8 @@ app.post("/reset-password", async (req, res) => {
         return res.status(500).json({ success: false, message: updateError.message });
     }
 
-    // Now we can safely clean up
     delete verifiedEmails[email];
-    delete verificationCodes[email];
+    await supabase.from("password_resets").delete().eq("email", email);
 
     res.json({ success: true, message: "Password reset successfully." });
 });
@@ -396,11 +400,14 @@ app.post("/withdraw/send-code", async (req, res) => {
     }
 
     const code = crypto.randomInt(100000, 999999).toString();
-    verificationCodes[email] = {
-        code,
-        expires: Date.now() + CODE_EXPIRY,
-        type: "withdrawal"
-    };
+    
+    // Save to database
+    const expiresAt = new Date(Date.now() + CODE_EXPIRY).toISOString();
+    await supabase.from("password_resets").upsert([{ 
+        email: email, 
+        code: code, 
+        expires_at: expiresAt 
+    }], { onConflict: 'email' });
 
     try {
         const { data, error } = await resend.emails.send({
@@ -458,22 +465,23 @@ app.post("/withdraw/create", async (req, res) => {
         });
     }
 
-    const savedCode = verificationCodes[email];
+    // Check code in database
+    const { data: resetData, error: codeErr } = await supabase
+        .from("password_resets")
+        .select("*")
+        .eq("email", email)
+        .single();
 
-    if (!savedCode) {
+    if (codeErr || !resetData) {
         return res.status(401).json({ success: false, message: "Verification code not found." });
     }
 
-    if (savedCode.type !== "withdrawal") {
-        return res.status(401).json({ success: false, message: "Invalid code type." });
-    }
-
-    if (Date.now() > savedCode.expires) {
-        delete verificationCodes[email];
+    if (new Date() > new Date(resetData.expires_at)) {
+        await supabase.from("password_resets").delete().eq("email", email);
         return res.status(401).json({ success: false, message: "Verification code expired." });
     }
 
-    if (savedCode.code !== code) {
+    if (resetData.code !== code) {
         return res.status(401).json({ success: false, message: "Invalid verification code." });
     }
 
@@ -513,7 +521,7 @@ app.post("/withdraw/create", async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 
-    delete verificationCodes[email];
+    await supabase.from("password_resets").delete().eq("email", email);
 
     res.json({
         success: true,

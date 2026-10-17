@@ -9,10 +9,9 @@ const supabase = require("./supabase");
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// Temporary storage for verification codes
+// Temporary storage for verification codes (Still in memory, but no longer used for pending signups)
 const verificationCodes = {};
 const verifiedEmails = {};
-const pendingSignups = {};
 
 const CODE_EXPIRY = 10 * 60 * 1000; // 10 minutes
 
@@ -68,6 +67,7 @@ app.post("/signup/send-code", async (req, res) => {
         return res.status(400).json({ success: false, message: "Email is required." });
     }
 
+    // Check if user already exists
     const { data: existingUser } = await supabase
         .from("users")
         .select("id")
@@ -78,8 +78,24 @@ app.post("/signup/send-code", async (req, res) => {
         return res.json({ success: false, message: "Email already exists." });
     }
 
-    pendingSignups[email] = { fullName, phone, country, email, password };
+    // 1. Save user to database IMMEDIATELY (set is_verified to false)
+    const { error: dbError } = await supabase
+        .from("users")
+        .insert([{ 
+            full_name: fullName, 
+            phone, 
+            country, 
+            email, 
+            password,
+            is_verified: false // Requires the 'is_verified' boolean column in Supabase
+        }]);
 
+    if (dbError) {
+        console.error("❌ DB INSERT ERROR:", dbError);
+        return res.status(500).json({ success: false, message: "Database error: " + dbError.message });
+    }
+
+    // 2. Generate code and send email
     const code = crypto.randomInt(100000, 999999).toString();
     verificationCodes[email] = {
         code,
@@ -119,7 +135,7 @@ app.post("/signup/verify", async (req, res) => {
     const savedCode = verificationCodes[email];
 
     if (!savedCode) {
-        return res.status(401).json({ success: false, message: "Verification code not found." });
+        return res.status(401).json({ success: false, message: "Verification code not found. Please request a new one." });
     }
 
     if (savedCode.type !== "signup") {
@@ -135,30 +151,21 @@ app.post("/signup/verify", async (req, res) => {
         return res.status(401).json({ success: false, message: "Invalid verification code." });
     }
 
-    const signupInfo = pendingSignups[email];
-    if (!signupInfo) {
-        return res.status(400).json({ success: false, message: "Signup information not found." });
-    }
-
-    const { data, error } = await supabase
+    // 3. Update the user in the database to verified
+    const { error: updateError } = await supabase
         .from("users")
-        .insert([{
-            full_name: signupInfo.fullName,
-            phone: signupInfo.phone,
-            country: signupInfo.country,
-            email: signupInfo.email,
-            password: signupInfo.password
-        }])
-        .select();
+        .update({ is_verified: true })
+        .eq("email", email);
 
-    if (error) {
-        return res.status(500).json({ success: false, message: error.message });
+    if (updateError) {
+        console.error("❌ DB UPDATE ERROR:", updateError);
+        return res.status(500).json({ success: false, message: "Failed to verify user in database." });
     }
 
-    delete pendingSignups[email];
+    // Clean up the code
     delete verificationCodes[email];
 
-    res.json({ success: true });
+    res.json({ success: true, message: "Email verified successfully." });
 });
 
 /* ---------------- SIGNUP (DIRECT) ---------------- */
@@ -181,7 +188,7 @@ app.post("/signup", async (req, res) => {
 
     const { data, error } = await supabase
         .from("users")
-        .insert([{ full_name: fullName, phone, country, email, password }])
+        .insert([{ full_name: fullName, phone, country, email, password, is_verified: true }]) // Direct signup assumes verified for testing
         .select();
 
     if (error) {
@@ -208,6 +215,11 @@ app.post("/login", async (req, res) => {
 
     if (error || !data) {
         return res.status(401).json({ success: false, message: "Invalid email or password." });
+    }
+
+    // 4. Block login if user is not verified
+    if (data.is_verified === false) {
+        return res.status(403).json({ success: false, message: "Please verify your email address before logging in." });
     }
 
     if (data.is_suspended) {
@@ -250,7 +262,7 @@ app.get("/user/:id", async (req, res) => {
 });
 
 /* ==========================================================
-   ★ FORGOT PASSWORD (FIXED)
+   ★ FORGOT PASSWORD
 ========================================================== */
 app.post("/forgot-password", async (req, res) => {
     const { email } = req.body;
@@ -303,7 +315,7 @@ app.post("/forgot-password", async (req, res) => {
     }
 });
 
-/* ---------------- VERIFY CODE (FIXED) ---------------- */
+/* ---------------- VERIFY CODE ---------------- */
 app.post("/verify-code", (req, res) => {
     const { email, code } = req.body;
 
@@ -337,7 +349,7 @@ app.post("/verify-code", (req, res) => {
     res.json({ success: true, message: "Verification successful." });
 });
 
-/* ---------------- RESET PASSWORD (FIXED) ---------------- */
+/* ---------------- RESET PASSWORD ---------------- */
 app.post("/reset-password", async (req, res) => {
     const { email, password } = req.body;
 

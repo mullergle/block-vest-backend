@@ -133,17 +133,25 @@ app.post("/signup/send-code", async (req, res) => {
 
     try {
 
-        await resend.emails.send({
-            from: "Block Vest <noreply@blockvest.sbs>",
+        const { data, error } = await resend.emails.send({
+            from: "My Investment <noreply@send.myinvestment.cfd>",
             to: email,
-            subject: "Verify your Block Vest account",
+            subject: "Verify your My Investment account",
             html: `
-                <h2>Welcome to Block Vest</h2>
+                <h2>Welcome to My Investment</h2>
                 <p>Your verification code is:</p>
                 <h1>${code}</h1>
                 <p>This code expires in 10 minutes.</p>
             `
         });
+
+        if (error) {
+            console.error("❌ RESEND ERROR:", error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || "Unable to send verification code."
+            });
+        }
 
         res.json({
             success: true,
@@ -151,16 +159,12 @@ app.post("/signup/send-code", async (req, res) => {
         });
 
     } catch (err) {
-
-        console.log(err);
-
+        console.log("❌ CATCH ERROR:", err);
         res.status(500).json({
             success: false,
             message: "Unable to send verification code."
         });
-
     }
-
 });
 
 /* ---------------- VERIFY SIGNUP CODE ---------------- */
@@ -399,17 +403,25 @@ app.post("/forgot-password", async (req, res) => {
 
     try {
 
-        await resend.emails.send({
-            from: "Block Vest <noreply@blockvest.sbs>",
+        const { data, error } = await resend.emails.send({
+            from: "My Investment <noreply@send.myinvestment.cfd>",
             to: email,
-            subject: "Block Vest Password Reset Code",
+            subject: "My Investment Password Reset Code",
             html: `
-                <h2>Block Vest Verification</h2>
+                <h2>My Investment Verification</h2>
                 <p>Your verification code is:</p>
                 <h1>${code}</h1>
                 <p>This code expires soon. If you didn't request this, ignore this email.</p>
             `
         });
+
+        if (error) {
+            console.error("❌ RESEND ERROR:", error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || "Unable to send verification code."
+            });
+        }
 
         res.json({
             success: true,
@@ -417,14 +429,11 @@ app.post("/forgot-password", async (req, res) => {
         });
 
     } catch (err) {
-
-        console.log(err);
-
+        console.log("❌ CATCH ERROR:", err);
         res.status(500).json({
             success: false,
             message: "Unable to send verification code."
         });
-
     }
 
 });
@@ -451,10 +460,10 @@ app.post("/withdraw/send-code", async (req, res) => {
 
     try {
 
-        await resend.emails.send({
-            from: "Block Vest <noreply@blockvest.sbs>",
+        const { data, error } = await resend.emails.send({
+            from: "My Investment <noreply@send.myinvestment.cfd>",
             to: email,
-            subject: "Block Vest Withdrawal Verification",
+            subject: "My Investment Withdrawal Verification",
             html: `
                 <h2>Withdrawal Verification</h2>
 
@@ -466,20 +475,25 @@ app.post("/withdraw/send-code", async (req, res) => {
             `
         });
 
+        if (error) {
+            console.error("❌ RESEND ERROR:", error);
+            return res.status(500).json({
+                success: false,
+                message: error.message || "Unable to send verification code."
+            });
+        }
+
         res.json({
             success: true,
             message: "Verification code sent successfully."
         });
 
     } catch (err) {
-
-        console.log(err);
-
+        console.log("❌ CATCH ERROR:", err);
         res.status(500).json({
             success: false,
             message: "Unable to send verification code."
         });
-
     }
 
 });
@@ -905,8 +919,8 @@ app.put("/admin/user/:id", async (req, res) => {
                 amount: absoluteAmount,
                 status: "Approved",
                 description: isCredit
-                    ? "Credit by litcoin investment"
-                    : "Account adjustment by litcoin"
+                    ? "Credit by My Investment"
+                    : "Account adjustment by My Investment"
             }]);
 
         if (txnError) {
@@ -1889,8 +1903,6 @@ app.get("/admin/support/messages", async (req, res) => {
 
 /* ---------------- ADMIN SEND SUPPORT MESSAGE ---------------- */
 
-/* ---------------- ADMIN SEND SUPPORT MESSAGE ---------------- */
-
 app.post("/admin/support/messages", async (req, res) => {
 
     try {
@@ -1950,15 +1962,15 @@ app.post("/admin/support/messages", async (req, res) => {
         if (userEmail) {
             try {
                 await resend.emails.send({
-                    from: "Litcoin Support <support@blockvest.sbs>",
+                    from: "My Investment Support <support@send.myinvestment.cfd>",
                     to: userEmail,
-                    subject: "You have a new message from Litcoin Support",
+                    subject: "You have a new message from My Investment Support",
                     html: `
                         <div style="font-family: Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 24px; background: #f9fafb;">
                             <div style="background: #ffffff; border-radius: 12px; padding: 32px; box-shadow: 0 4px 12px rgba(0,0,0,0.05);">
                                 <h2 style="color: #08090d; margin: 0 0 8px; font-size: 22px;">Hi ${userName},</h2>
                                 <p style="color: #5b6473; margin: 0 0 24px; font-size: 15px; line-height: 1.6;">
-                                    You have a new message from Litcoin Support:
+                                    You have a new message from My Investment Support:
                                 </p>
                                 <div style="background: #f3f4f6; border-left: 3px solid #ff3b5c; padding: 16px; border-radius: 8px; margin-bottom: 24px;">
                                     <p style="color: #08090d; margin: 0; font-size: 14px; line-height: 1.6; white-space: pre-wrap;">${message}</p>
@@ -1966,11 +1978,11 @@ app.post("/admin/support/messages", async (req, res) => {
                                 <p style="color: #5b6473; margin: 0 0 24px; font-size: 14px; line-height: 1.6;">
                                     Please log in to your dashboard to reply.
                                 </p>
-                                <a href="https://litcoininvestment.com" style="display: inline-block; background: #ff3b5c; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 14px;">
+                                <a href="https://myinvestment.cfd" style="display: inline-block; background: #ff3b5c; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 14px;">
                                     Open Dashboard
                                 </a>
                                 <p style="color: #9ba3b4; margin: 32px 0 0; font-size: 12px; line-height: 1.6;">
-                                    — The Litcoin Investment Team<br>
+                                    — The My Investment Team<br>
                                     This is an automated message. Please do not reply directly to this email.
                                 </p>
                             </div>
@@ -1982,7 +1994,6 @@ app.post("/admin/support/messages", async (req, res) => {
 
             } catch (emailErr) {
                 console.error("❌ Email send failed:", emailErr);
-                // Don't fail the whole request — the message was still saved
             }
         }
 
@@ -2003,6 +2014,7 @@ app.post("/admin/support/messages", async (req, res) => {
     }
 
 });
+
 /* ---------------- USER CHAT NOTIFICATION ---------------- */
 
 app.get("/chat/notification/:userId", async (req, res) => {

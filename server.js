@@ -9,9 +9,6 @@ const supabase = require("./supabase");
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// Temporary storage (Only used for quick checks, no longer used for signup or reset codes)
-const verifiedEmails = {};
-
 const CODE_EXPIRY = 10 * 60 * 1000; // 10 minutes
 
 const app = express();
@@ -76,7 +73,6 @@ app.post("/signup/send-code", async (req, res) => {
         return res.json({ success: false, message: "Email already exists." });
     }
 
-    // Save user to database IMMEDIATELY (unverified)
     const { error: dbError } = await supabase
         .from("users")
         .insert([{ 
@@ -94,9 +90,8 @@ app.post("/signup/send-code", async (req, res) => {
     }
 
     const code = crypto.randomInt(100000, 999999).toString();
-    
-    // Save code to database (using the password_resets table for temporary codes)
     const expiresAt = new Date(Date.now() + CODE_EXPIRY).toISOString();
+    
     await supabase.from("password_resets").upsert([{ 
         email: email, 
         code: code, 
@@ -132,7 +127,6 @@ app.post("/signup/send-code", async (req, res) => {
 app.post("/signup/verify", async (req, res) => {
     const { email, code } = req.body;
 
-    // Check code in database
     const { data: resetData, error } = await supabase
         .from("password_resets")
         .select("*")
@@ -152,7 +146,6 @@ app.post("/signup/verify", async (req, res) => {
         return res.status(401).json({ success: false, message: "Invalid verification code." });
     }
 
-    // Update user to verified
     const { error: updateError } = await supabase
         .from("users")
         .update({ is_verified: true })
@@ -162,8 +155,8 @@ app.post("/signup/verify", async (req, res) => {
         return res.status(500).json({ success: false, message: "Failed to verify user." });
     }
 
-    // Clean up code
-    await supabase.from("password_resets").delete().eq("email", email);
+    // DO NOT DELETE THE CODE YET! 
+    // We need it for the reset password step to confirm they actually verified.
 
     res.json({ success: true, message: "Email verified successfully." });
 });
@@ -281,9 +274,8 @@ app.post("/forgot-password", async (req, res) => {
     }
 
     const code = crypto.randomInt(100000, 999999).toString();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); 
+    const expiresAt = new Date(Date.now() + CODE_EXPIRY).toISOString(); 
 
-    // Save to database
     const { error: dbError } = await supabase
         .from("password_resets")
         .upsert([{ 
@@ -322,7 +314,7 @@ app.post("/forgot-password", async (req, res) => {
     }
 });
 
-/* ---------------- VERIFY CODE ---------------- */
+/* ---------------- VERIFY CODE (For Forgot Password) ---------------- */
 app.post("/verify-code", async (req, res) => {
     const { email, code } = req.body;
 
@@ -349,12 +341,13 @@ app.post("/verify-code", async (req, res) => {
         return res.status(401).json({ success: false, message: "Invalid verification code." });
     }
 
-    verifiedEmails[email] = true;
+    // WE DO NOT DELETE THE CODE HERE. 
+    // It stays in the database so the /reset-password route can verify it exists.
 
     res.json({ success: true, message: "Verification successful." });
 });
 
-/* ---------------- RESET PASSWORD ---------------- */
+/* ---------------- RESET PASSWORD (SECURE & DATABASE CHECK) ---------------- */
 app.post("/reset-password", async (req, res) => {
     const { email, password } = req.body;
 
@@ -362,20 +355,23 @@ app.post("/reset-password", async (req, res) => {
         return res.status(400).json({ success: false, message: "Email and password are required." });
     }
 
-    if (!verifiedEmails[email]) {
-        return res.status(403).json({ success: false, message: "Please verify your email first." });
-    }
-
-    const { data: user, error } = await supabase
-        .from("users")
-        .select("id")
+    // 1. Check if there is a valid code in the database for this email (Proof they verified)
+    const { data: resetData, error: codeErr } = await supabase
+        .from("password_resets")
+        .select("*")
         .eq("email", email)
         .single();
 
-    if (error || !user) {
-        return res.status(404).json({ success: false, message: "User not found." });
+    if (codeErr || !resetData) {
+        return res.status(403).json({ success: false, message: "Please verify your email first. Code expired or missing." });
     }
 
+    if (new Date() > new Date(resetData.expires_at)) {
+        await supabase.from("password_resets").delete().eq("email", email);
+        return res.status(403).json({ success: false, message: "Verification session expired. Please request a new code." });
+    }
+
+    // 2. Update the password
     const { error: updateError } = await supabase
         .from("users")
         .update({ password: password })
@@ -385,7 +381,7 @@ app.post("/reset-password", async (req, res) => {
         return res.status(500).json({ success: false, message: updateError.message });
     }
 
-    delete verifiedEmails[email];
+    // 3. Delete the code from database now that password is changed
     await supabase.from("password_resets").delete().eq("email", email);
 
     res.json({ success: true, message: "Password reset successfully." });
@@ -400,9 +396,8 @@ app.post("/withdraw/send-code", async (req, res) => {
     }
 
     const code = crypto.randomInt(100000, 999999).toString();
-    
-    // Save to database
     const expiresAt = new Date(Date.now() + CODE_EXPIRY).toISOString();
+    
     await supabase.from("password_resets").upsert([{ 
         email: email, 
         code: code, 
@@ -465,7 +460,6 @@ app.post("/withdraw/create", async (req, res) => {
         });
     }
 
-    // Check code in database
     const { data: resetData, error: codeErr } = await supabase
         .from("password_resets")
         .select("*")
@@ -1079,7 +1073,6 @@ app.post("/admin/support/messages", async (req, res) => {
 
         if (error) return res.status(500).json({ success: false, message: error.message });
 
-        // Send email notification (non-blocking)
         try {
             const { data: user } = await supabase
                 .from("users")

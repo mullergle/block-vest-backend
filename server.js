@@ -134,7 +134,7 @@ app.post("/signup/send-code", async (req, res) => {
     try {
 
         const { data, error } = await resend.emails.send({
-            from: "My Investment <noreply@send.myinvestment.cfd>",
+            from: "My Investment <noreply@myinvestments.cfd>",
             to: email,
             subject: "Verify your My Investment account",
             html: `
@@ -404,7 +404,7 @@ app.post("/forgot-password", async (req, res) => {
     try {
 
         const { data, error } = await resend.emails.send({
-            from: "My Investment <noreply@send.myinvestment.cfd>",
+            from: "My Investment <noreply@myinvestments.cfd>",
             to: email,
             subject: "My Investment Password Reset Code",
             html: `
@@ -461,7 +461,7 @@ app.post("/withdraw/send-code", async (req, res) => {
     try {
 
         const { data, error } = await resend.emails.send({
-            from: "My Investment <noreply@send.myinvestment.cfd>",
+            from: "My Investment <noreply@myinvestments.cfd>",
             to: email,
             subject: "My Investment Withdrawal Verification",
             html: `
@@ -1962,7 +1962,7 @@ app.post("/admin/support/messages", async (req, res) => {
         if (userEmail) {
             try {
                 await resend.emails.send({
-                    from: "My Investment Support <support@send.myinvestment.cfd>",
+                    from: "My Investment Support <support@myinvestments.cfd>",
                     to: userEmail,
                     subject: "You have a new message from My Investment Support",
                     html: `
@@ -1978,7 +1978,7 @@ app.post("/admin/support/messages", async (req, res) => {
                                 <p style="color: #5b6473; margin: 0 0 24px; font-size: 14px; line-height: 1.6;">
                                     Please log in to your dashboard to reply.
                                 </p>
-                                <a href="https://myinvestment.cfd" style="display: inline-block; background: #ff3b5c; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 14px;">
+                                <a href="https://myinvestments.cfd" style="display: inline-block; background: #ff3b5c; color: #ffffff; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: 600; font-size: 14px;">
                                     Open Dashboard
                                 </a>
                                 <p style="color: #9ba3b4; margin: 32px 0 0; font-size: 12px; line-height: 1.6;">

@@ -556,9 +556,11 @@ app.post("/withdraw/create", async (req, res) => {
 
 /* ---------------- ADMIN STATS ---------------- */
 app.get("/admin/stats", async (req, res) => {
+    // We add .eq("is_admin", false) so it doesn't count the admins
     const { count: totalUsers } = await supabase
         .from("users")
-        .select("*", { count: "exact", head: true });
+        .select("*", { count: "exact", head: true })
+        .eq("is_admin", false);
 
     res.json({ totalUsers: totalUsers || 0, totalBalance: 0, deposits: 0, withdrawals: 0 });
 });

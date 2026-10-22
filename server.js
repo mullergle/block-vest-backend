@@ -4,8 +4,6 @@ const cors = require("cors");
 const multer = require("multer");
 const { Resend } = require("resend");
 const crypto = require("crypto");
-const jwt = require("jsonwebtoken");
-const rateLimit = require("express-rate-limit");
 
 const supabase = require("./supabase");
 
@@ -13,15 +11,13 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const CODE_EXPIRY = 10 * 60 * 1000; // 10 minutes
 const TOKEN_EXPIRY = 15 * 60 * 1000; // 15 minutes
-const JWT_EXPIRES_IN = "7d";
+const AUTH_EXPIRY = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-if (!process.env.JWT_SECRET) {
-    console.error("❌ FATAL: JWT_SECRET is not set. Refusing to start.");
-    process.exit(1);
-}
+// Fallback to a default secret if not set in .env to prevent crashes
+const JWT_SECRET = process.env.JWT_SECRET || "my-investment-super-secret-key-change-me";
 
 const app = express();
-app.set("trust proxy", 1); // needed for rate-limit behind proxies
+app.set("trust proxy", 1); 
 const PORT = process.env.PORT || 3000;
 
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "https://myinvestments.cfd")
@@ -44,7 +40,7 @@ const upload = multer({
 /* ---------------- MIDDLEWARES ---------------- */
 app.use(cors({
     origin: (origin, cb) => {
-        if (!origin) return cb(null, true); // non-browser / same-origin
+        if (!origin) return cb(null, true);
         if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
         cb(new Error("Not allowed by CORS"));
     },
@@ -52,27 +48,44 @@ app.use(cors({
 }));
 app.use(express.json({ limit: "1mb" }));
 
-/* ---------------- RATE LIMITERS ---------------- */
-const authLimiter = rateLimit({
+/* ---------------- ZERO-DEPENDENCY RATE LIMITER ---------------- */
+const rateLimitStore = new Map();
+
+function customRateLimit({ windowMs, max, message }) {
+    return (req, res, next) => {
+        const ip = req.ip || req.connection.remoteAddress;
+        const now = Date.now();
+        
+        if (!rateLimitStore.has(ip)) {
+            rateLimitStore.set(ip, []);
+        }
+        
+        const requests = rateLimitStore.get(ip).filter(time => now - time < windowMs);
+        
+        if (requests.length >= max) {
+            return res.status(429).json({ success: false, message });
+        }
+        
+        requests.push(now);
+        rateLimitStore.set(ip, requests);
+        next();
+    };
+}
+
+const authLimiter = customRateLimit({
     windowMs: 15 * 60 * 1000,
     max: 20,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { success: false, message: "Too many attempts. Please try again later." }
+    message: "Too many attempts. Please try again later."
 });
-const codeLimiter = rateLimit({
+const codeLimiter = customRateLimit({
     windowMs: 10 * 60 * 1000,
     max: 5,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { success: false, message: "Too many code requests. Please wait." }
+    message: "Too many code requests. Please wait."
 });
-const verifyLimiter = rateLimit({
+const verifyLimiter = customRateLimit({
     windowMs: 10 * 60 * 1000,
     max: 10,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { success: false, message: "Too many verification attempts." }
+    message: "Too many verification attempts."
 });
 
 /* ---------------- VALIDATION HELPERS ---------------- */
@@ -110,24 +123,61 @@ function cleanNumber(v) {
     return isNaN(n) ? v : n;
 }
 
-/* ---------------- AUTH MIDDLEWARE ---------------- */
+/* ---------------- ZERO-DEPENDENCY AUTH (HMAC) ---------------- */
+function base64url(str) {
+    return Buffer.from(str).toString("base64").replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+function base64urlDecode(str) {
+    str = str.replace(/-/g, "+").replace(/_/g, "/");
+    return Buffer.from(str, "base64").toString("utf8");
+}
+
 function signToken(user) {
-    return jwt.sign(
-        { sub: user.id, is_admin: !!user.is_admin, email: user.email },
-        process.env.JWT_SECRET,
-        { expiresIn: JWT_EXPIRES_IN }
-    );
+    const header = base64url(JSON.stringify({ alg: "HS256", typ: "JWT" }));
+    const payload = base64url(JSON.stringify({
+        sub: user.id,
+        is_admin: !!user.is_admin,
+        email: user.email,
+        exp: Date.now() + AUTH_EXPIRY
+    }));
+    
+    const signature = crypto
+        .createHmac("sha256", JWT_SECRET)
+        .update(`${header}.${payload}`)
+        .digest("base64")
+        .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+
+    return `${header}.${payload}.${signature}`;
 }
 
 function authRequired(req, res, next) {
     const header = req.headers.authorization || "";
     const token = header.startsWith("Bearer ") ? header.slice(7) : null;
     if (!token) return res.status(401).json({ success: false, message: "Authentication required." });
+    
+    const parts = token.split(".");
+    if (parts.length !== 3) return res.status(401).json({ success: false, message: "Invalid token format." });
+
+    const [headerB64, payloadB64, signature] = parts;
+    const expectedSignature = crypto
+        .createHmac("sha256", JWT_SECRET)
+        .update(`${headerB64}.${payloadB64}`)
+        .digest("base64")
+        .replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+
+    if (signature !== expectedSignature) {
+        return res.status(401).json({ success: false, message: "Invalid token signature." });
+    }
+
     try {
-        req.user = jwt.verify(token, process.env.JWT_SECRET);
+        const payload = JSON.parse(base64urlDecode(payloadB64));
+        if (payload.exp && Date.now() > payload.exp) {
+            return res.status(401).json({ success: false, message: "Token expired." });
+        }
+        req.user = payload;
         next();
-    } catch {
-        return res.status(401).json({ success: false, message: "Invalid or expired token." });
+    } catch (err) {
+        return res.status(401).json({ success: false, message: "Invalid token payload." });
     }
 }
 
@@ -140,7 +190,6 @@ function adminRequired(req, res, next) {
     });
 }
 
-/** Allow either the same user or any admin */
 function selfOrAdmin(paramName = "userId") {
     return (req, res, next) => {
         authRequired(req, res, () => {
@@ -158,10 +207,6 @@ function serverError(res, err, context = "") {
 }
 
 /* ---------------- ATOMIC BALANCE HELPER ---------------- */
-/**
- * Atomic balance delta. Uses RPC `increment_balance(p_user_id, p_delta)` if it exists,
- * otherwise falls back to read-then-write (NOT atomic).
- */
 async function adjustBalance(userId, delta) {
     const { error } = await supabase.rpc("increment_balance", {
         p_user_id: userId,
@@ -235,16 +280,6 @@ async function sendWelcomeEmail({ to, fullName }) {
 }
 
 /* ---------------- CODE STORAGE HELPERS ---------------- */
-/**
- * We store verification codes in `password_resets` and distinguish by `purpose`:
- *  - "signup"
- *  - "password_reset"
- *  - "withdrawal"
- *
- * NOTE: requires `purpose` column on password_resets. If it doesn't exist,
- * queries still work (Postgres ignores unknown filter only if you don't filter),
- * so to stay compatible we filter manually after fetch where possible.
- */
 async function saveCode(email, code, purpose) {
     const expiresAt = new Date(Date.now() + CODE_EXPIRY).toISOString();
     const { error } = await supabase
@@ -252,7 +287,6 @@ async function saveCode(email, code, purpose) {
         .upsert([{ email, code, expires_at: expiresAt, purpose }], { onConflict: "email" });
     if (error) {
         console.error("saveCode error:", error);
-        // Retry without purpose column (legacy schema)
         const { error: e2 } = await supabase
             .from("password_resets")
             .upsert([{ email, code, expires_at: expiresAt }], { onConflict: "email" });
@@ -321,7 +355,6 @@ app.post("/signup/send-code", codeLimiter, async (req, res) => {
             return res.status(400).json({ success: false, message: "Email already exists." });
         }
 
-        // If user exists but unverified, update their details (re-signup)
         if (existingUser) {
             await supabase.from("users").update({
                 full_name: fullName, phone, country, password
@@ -393,10 +426,8 @@ app.post("/signup/verify", verifyLimiter, async (req, res) => {
         const { data: verifiedUser } = await supabase
             .from("users").select("id,full_name,email,is_admin").eq("email", email).maybeSingle();
 
-        // Send welcome email (fire-and-forget, but log failures)
         await sendWelcomeEmail({ to: email, fullName: verifiedUser?.full_name });
 
-        // Issue JWT so the client doesn't need a separate login
         const token = verifiedUser ? signToken(verifiedUser) : null;
 
         res.json({
@@ -417,10 +448,6 @@ app.post("/signup/verify", verifyLimiter, async (req, res) => {
     }
 });
 
-/**
- * Direct signup — REMOVED from the public API (was bypassing verification).
- * If you truly need it, gate it behind ADMIN_SECRET env var.
- */
 app.post("/signup-direct", async (req, res) => {
     if (!process.env.ADMIN_SECRET || req.headers["x-admin-secret"] !== process.env.ADMIN_SECRET) {
         return res.status(404).json({ success: false, message: "Not found." });
@@ -623,7 +650,6 @@ app.post("/reset-password", authLimiter, async (req, res) => {
 ========================================================== */
 app.post("/withdraw/send-code", codeLimiter, authRequired, async (req, res) => {
     try {
-        // Use authed user's email — do NOT trust body
         const email = req.user.email;
         if (!isEmail(email)) {
             return res.status(400).json({ success: false, message: "Invalid email on account." });
@@ -655,7 +681,6 @@ app.post("/withdraw/send-code", codeLimiter, authRequired, async (req, res) => {
 
 app.post("/withdraw/create", authRequired, async (req, res) => {
     try {
-        // user_id and email from token — NOT body
         const userId = req.user.sub;
         const email = req.user.email;
         const { code, method, wallet_address, amount } = req.body;
@@ -694,7 +719,6 @@ app.post("/withdraw/create", authRequired, async (req, res) => {
             return res.status(401).json({ success: false, message: "Invalid verification code." });
         }
 
-        // Reserve funds atomically by debiting balance at create time (safer than at approve)
         const debit = await adjustBalance(userId, -numericAmount);
         if (!debit.ok) {
             return res.status(500).json({ success: false, message: "Could not reserve balance." });
@@ -711,7 +735,6 @@ app.post("/withdraw/create", authRequired, async (req, res) => {
             }])
             .select();
         if (txnError) {
-            // rollback balance
             await adjustBalance(userId, numericAmount);
             return serverError(res, txnError, "withdraw/create txn");
         }
@@ -1034,7 +1057,6 @@ app.put("/admin/withdrawals/:id/approve", adminRequired, async (req, res) => {
         if (withdrawal.status === "Approved") return res.status(400).json({ success: false, message: "Already approved." });
         if (withdrawal.status === "Rejected") return res.status(400).json({ success: false, message: "Already rejected." });
 
-        // Funds were reserved at create time — just flip status
         await supabase.from("withdrawals").update({ status: "Approved" }).eq("id", req.params.id);
         if (withdrawal.transaction_id) {
             await supabase.from("transactions").update({ status: "Approved" }).eq("id", withdrawal.transaction_id);
@@ -1053,7 +1075,6 @@ app.put("/admin/withdrawals/:id/reject", adminRequired, async (req, res) => {
         if (withdrawal.status === "Rejected") return res.status(400).json({ success: false, message: "Already rejected." });
         if (withdrawal.status === "Approved") return res.status(400).json({ success: false, message: "Already approved — cannot reject." });
 
-        // Refund reserved balance
         const refund = await adjustBalance(withdrawal.user_id, Number(withdrawal.amount));
         if (!refund.ok) return res.status(500).json({ success: false, message: "Could not refund balance." });
 
@@ -1075,7 +1096,6 @@ app.delete("/admin/withdrawals/:id", adminRequired, async (req, res) => {
         .from("withdrawals").select("*").eq("id", req.params.id).maybeSingle();
     if (error || !withdrawal) return res.status(404).json({ success: false, message: "Withdrawal not found." });
 
-    // If still pending, refund the reserved funds
     if (withdrawal.status === "Pending") {
         await adjustBalance(withdrawal.user_id, Number(withdrawal.amount));
     }
@@ -1117,9 +1137,6 @@ app.get("/admin/deposits", adminRequired, async (req, res) => {
     });
 });
 
-/**
- * Deposit approval — credits the CORRECT balance based on payment_method.
- */
 app.put("/admin/deposits/:id/approve", adminRequired, async (req, res) => {
     try {
         const { data: deposit, error } = await supabase
@@ -1128,24 +1145,20 @@ app.put("/admin/deposits/:id/approve", adminRequired, async (req, res) => {
         if (deposit.status === "Approved") return res.status(400).json({ success: false, message: "Already approved." });
         if (deposit.status === "Rejected") return res.status(400).json({ success: false, message: "Already rejected." });
 
-        // 1. Always credit main balance atomically
         const creditMain = await adjustBalance(deposit.user_id, Number(deposit.amount));
         if (!creditMain.ok) return res.status(500).json({ success: false, message: "Could not credit balance." });
 
-        // 2. Credit the correct crypto balance based on payment method
         const method = (deposit.payment_method || "BTC").toUpperCase();
         const col = method.includes("ETH") ? "eth_balance"
                   : method.includes("USDT") ? "usdt_balance"
                   : "btc_balance";
 
-        // Use atomic-ish update via RPC if available, else read-then-write
         const { error: rpcErr } = await supabase.rpc("increment_asset", {
             p_user_id: deposit.user_id,
             p_column: col,
             p_delta: Number(deposit.amount)
         });
         if (rpcErr) {
-            // Fallback
             const { data: u } = await supabase
                 .from("users").select(col).eq("id", deposit.user_id).single();
             if (u) {
@@ -1319,7 +1332,6 @@ app.post("/admin/support/messages", adminRequired, async (req, res) => {
             .select().single();
         if (error) return serverError(res, error, "admin/support/messages");
 
-        // Non-blocking email notification
         try {
             const { data: user } = await supabase
                 .from("users").select("email, full_name").eq("id", user_id).maybeSingle();

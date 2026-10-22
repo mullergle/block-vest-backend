@@ -148,9 +148,7 @@ app.post("/signup/send-code", async (req, res) => {
     await supabase.from("password_resets").upsert([{ 
         email: email, 
         code: code, 
-        expires_at: expiresAt,
-        token: null,                    // ← FIX: clear old token
-        token_expires_at: null          // ← FIX: clear old token expiry
+        expires_at: expiresAt
     }], { onConflict: 'email' });
 
     try {
@@ -365,9 +363,7 @@ app.post("/forgot-password", async (req, res) => {
         .upsert([{ 
             email: email, 
             code: code, 
-            expires_at: expiresAt,
-            token: null,                    // ← FIX: clear old token
-            token_expires_at: null          // ← FIX: clear old token expiry
+            expires_at: expiresAt
         }], { onConflict: 'email' });
 
     if (dbError) {
@@ -466,11 +462,6 @@ app.post("/reset-password", async (req, res) => {
         return res.status(403).json({ success: false, message: "Invalid or expired reset session. Please request a new code." });
     }
 
-    // ✅ NEW GUARD: fail fast if token_expires_at is missing
-    if (!resetData.token_expires_at) {
-        return res.status(403).json({ success: false, message: "Reset session invalid. Please request a new code." });
-    }
-
     if (new Date() > new Date(resetData.token_expires_at)) {
         await supabase.from("password_resets").delete().eq("email", email);
         return res.status(403).json({ success: false, message: "Session expired. Please request a new code." });
@@ -506,9 +497,7 @@ app.post("/withdraw/send-code", async (req, res) => {
     await supabase.from("password_resets").upsert([{ 
         email: email, 
         code: code, 
-        expires_at: expiresAt,
-        token: null,                    // ← FIX: clear old token
-        token_expires_at: null          // ← FIX: clear old token expiry
+        expires_at: expiresAt
     }], { onConflict: 'email' });
 
     try {

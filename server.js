@@ -803,9 +803,10 @@ app.put("/change-password/:id", async (req, res) => {
     res.json({ success: true, message: "Password updated successfully" });
 });
 
-/* ---------------- CREATE DEPOSIT ---------------- */
+/* ---------------- CREATE DEPOSIT (UPDATED FOR DYNAMIC METHOD) ---------------- */
 app.post("/deposit", upload.single("receipt"), async (req, res) => {
-    const { user_id, amount } = req.body;
+    // 1. Extract payment_method from the frontend
+    const { user_id, amount, payment_method } = req.body;
 
     if (!req.file) return res.status(400).json({ success: false, message: "Receipt is required." });
 
@@ -830,6 +831,9 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
     }
 
     const cleanAmount = numericAmount;
+    
+    // 2. Use the actual payment method provided
+    const description = `${payment_method || 'Crypto'} Deposit`;
 
     const { data: txnData, error: transactionError } = await supabase
         .from("transactions")
@@ -838,7 +842,7 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
             type: "Deposit",
             amount: cleanAmount,
             status: "Pending",
-            description: "Bitcoin Deposit"
+            description: description 
         }])
         .select();
 
@@ -848,6 +852,8 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
 
     const transactionId = txnData && txnData[0] ? txnData[0].id : null;
 
+    // 3. Save the payment_method to the deposits table
+    // (Make sure you add a `payment_method` column in Supabase first!)
     const { data, error } = await supabase
         .from("deposits")
         .insert([{
@@ -855,7 +861,8 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
             amount: cleanAmount,
             receipt_url,
             status: "Pending",
-            transaction_id: transactionId
+            transaction_id: transactionId,
+            payment_method: payment_method 
         }])
         .select();
 

@@ -148,7 +148,9 @@ app.post("/signup/send-code", async (req, res) => {
     await supabase.from("password_resets").upsert([{ 
         email: email, 
         code: code, 
-        expires_at: expiresAt 
+        expires_at: expiresAt,
+        token: null,                    // ← FIX: clear old token
+        token_expires_at: null          // ← FIX: clear old token expiry
     }], { onConflict: 'email' });
 
     try {
@@ -222,8 +224,6 @@ app.post("/signup/verify", async (req, res) => {
     });
 
     // 💥 SMART TOKEN GENERATION
-    // We generate a secure, random token and save it to the database.
-    // The frontend will use this token on the next page instead of the email!
     const resetToken = crypto.randomBytes(32).toString('hex');
     const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
 
@@ -238,7 +238,7 @@ app.post("/signup/verify", async (req, res) => {
     res.json({ 
         success: true, 
         message: "Email verified successfully.",
-        reset_token: resetToken // <--- Send token to frontend
+        reset_token: resetToken
     });
 });
 
@@ -338,7 +338,7 @@ app.get("/user/:id", async (req, res) => {
 });
 
 /* ==========================================================
-   ★ FORGOT PASSWORD (DATABASE STORAGE FIX)
+   ★ FORGOT PASSWORD
 ========================================================== */
 app.post("/forgot-password", async (req, res) => {
     const { email } = req.body;
@@ -365,7 +365,9 @@ app.post("/forgot-password", async (req, res) => {
         .upsert([{ 
             email: email, 
             code: code, 
-            expires_at: expiresAt 
+            expires_at: expiresAt,
+            token: null,                    // ← FIX: clear old token
+            token_expires_at: null          // ← FIX: clear old token expiry
         }], { onConflict: 'email' });
 
     if (dbError) {
@@ -440,7 +442,7 @@ app.post("/verify-code", async (req, res) => {
     res.json({ 
         success: true, 
         message: "Verification successful.",
-        reset_token: resetToken // <--- Send token to frontend
+        reset_token: resetToken
     });
 });
 
@@ -457,11 +459,16 @@ app.post("/reset-password", async (req, res) => {
         .from("password_resets")
         .select("*")
         .eq("email", email)
-        .eq("token", token) // <--- Checks the smart token
+        .eq("token", token)
         .single();
 
     if (codeErr || !resetData) {
         return res.status(403).json({ success: false, message: "Invalid or expired reset session. Please request a new code." });
+    }
+
+    // ✅ NEW GUARD: fail fast if token_expires_at is missing
+    if (!resetData.token_expires_at) {
+        return res.status(403).json({ success: false, message: "Reset session invalid. Please request a new code." });
     }
 
     if (new Date() > new Date(resetData.token_expires_at)) {
@@ -499,7 +506,9 @@ app.post("/withdraw/send-code", async (req, res) => {
     await supabase.from("password_resets").upsert([{ 
         email: email, 
         code: code, 
-        expires_at: expiresAt 
+        expires_at: expiresAt,
+        token: null,                    // ← FIX: clear old token
+        token_expires_at: null          // ← FIX: clear old token expiry
     }], { onConflict: 'email' });
 
     try {
@@ -624,7 +633,6 @@ app.post("/withdraw/create", async (req, res) => {
 
 /* ---------------- ADMIN STATS ---------------- */
 app.get("/admin/stats", async (req, res) => {
-    // We add .eq("is_admin", false) so it doesn't count the admins
     const { count: totalUsers } = await supabase
         .from("users")
         .select("*", { count: "exact", head: true })

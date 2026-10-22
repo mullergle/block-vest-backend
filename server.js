@@ -4,24 +4,98 @@ const cors = require("cors");
 const multer = require("multer");
 const { Resend } = require("resend");
 const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
+const rateLimit = require("express-rate-limit");
 
 const supabase = require("./supabase");
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 const CODE_EXPIRY = 10 * 60 * 1000; // 10 minutes
+const TOKEN_EXPIRY = 15 * 60 * 1000; // 15 minutes
+const JWT_EXPIRES_IN = "7d";
+
+if (!process.env.JWT_SECRET) {
+    console.error("❌ FATAL: JWT_SECRET is not set. Refusing to start.");
+    process.exit(1);
+}
 
 const app = express();
+app.set("trust proxy", 1); // needed for rate-limit behind proxies
 const PORT = process.env.PORT || 3000;
+
+const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "https://myinvestments.cfd")
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+
 const upload = multer({
-    storage: multer.memoryStorage()
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
+    fileFilter: (req, file, cb) => {
+        const allowed = /^(image\/(jpeg|png|webp|gif)|application\/pdf)$/;
+        if (!allowed.test(file.mimetype)) {
+            return cb(new Error("Invalid file type. Only images and PDFs are allowed."));
+        }
+        cb(null, true);
+    }
 });
 
-// Middlewares
-app.use(cors());
-app.use(express.json());
+/* ---------------- MIDDLEWARES ---------------- */
+app.use(cors({
+    origin: (origin, cb) => {
+        if (!origin) return cb(null, true); // non-browser / same-origin
+        if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+        cb(new Error("Not allowed by CORS"));
+    },
+    credentials: true
+}));
+app.use(express.json({ limit: "1mb" }));
 
-/* ---------------- HELPERS ---------------- */
+/* ---------------- RATE LIMITERS ---------------- */
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: "Too many attempts. Please try again later." }
+});
+const codeLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: "Too many code requests. Please wait." }
+});
+const verifyLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { success: false, message: "Too many verification attempts." }
+});
+
+/* ---------------- VALIDATION HELPERS ---------------- */
+function isEmail(v) {
+    return typeof v === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim());
+}
+function isUuid(v) {
+    return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+}
+function isPositiveNumber(v) {
+    const n = Number(String(v ?? "").replace(/,/g, "").trim());
+    return !isNaN(n) && n > 0;
+}
+function escapeHtml(str) {
+    return String(str ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+/* ---------------- FORMATTING HELPERS ---------------- */
 function formatMoney(value) {
     const num = Number(value || 0);
     if (isNaN(num)) return "0.00";
@@ -30,16 +104,85 @@ function formatMoney(value) {
         maximumFractionDigits: 2
     });
 }
-
 function cleanNumber(v) {
     if (v === undefined || v === null || v === "") return v;
     const n = Number(String(v).replace(/,/g, "").trim());
     return isNaN(n) ? v : n;
 }
 
-/* ---------------- WELCOME EMAIL HELPER ---------------- */
+/* ---------------- AUTH MIDDLEWARE ---------------- */
+function signToken(user) {
+    return jwt.sign(
+        { sub: user.id, is_admin: !!user.is_admin, email: user.email },
+        process.env.JWT_SECRET,
+        { expiresIn: JWT_EXPIRES_IN }
+    );
+}
+
+function authRequired(req, res, next) {
+    const header = req.headers.authorization || "";
+    const token = header.startsWith("Bearer ") ? header.slice(7) : null;
+    if (!token) return res.status(401).json({ success: false, message: "Authentication required." });
+    try {
+        req.user = jwt.verify(token, process.env.JWT_SECRET);
+        next();
+    } catch {
+        return res.status(401).json({ success: false, message: "Invalid or expired token." });
+    }
+}
+
+function adminRequired(req, res, next) {
+    authRequired(req, res, () => {
+        if (!req.user.is_admin) {
+            return res.status(403).json({ success: false, message: "Admin access required." });
+        }
+        next();
+    });
+}
+
+/** Allow either the same user or any admin */
+function selfOrAdmin(paramName = "userId") {
+    return (req, res, next) => {
+        authRequired(req, res, () => {
+            const targetId = req.params[paramName] || req.params.id;
+            if (req.user.is_admin || req.user.sub === targetId) return next();
+            return res.status(403).json({ success: false, message: "Forbidden." });
+        });
+    };
+}
+
+/* ---------------- SAFE ERROR RESPONSE ---------------- */
+function serverError(res, err, context = "") {
+    console.error(`❌${context ? " [" + context + "]" : ""}`, err);
+    return res.status(500).json({ success: false, message: "Something went wrong. Please try again." });
+}
+
+/* ---------------- ATOMIC BALANCE HELPER ---------------- */
+/**
+ * Atomic balance delta. Uses RPC `increment_balance(p_user_id, p_delta)` if it exists,
+ * otherwise falls back to read-then-write (NOT atomic).
+ */
+async function adjustBalance(userId, delta) {
+    const { error } = await supabase.rpc("increment_balance", {
+        p_user_id: userId,
+        p_delta: delta
+    });
+    if (!error) return { ok: true };
+
+    console.warn("⚠️ RPC increment_balance failed, falling back:", error.message);
+    const { data: row, error: fetchErr } = await supabase
+        .from("users").select("balance").eq("id", userId).single();
+    if (fetchErr || !row) return { ok: false, error: "User not found" };
+    const newBalance = Number(row.balance || 0) + Number(delta);
+    const { error: updateErr } = await supabase
+        .from("users").update({ balance: newBalance }).eq("id", userId);
+    if (updateErr) return { ok: false, error: updateErr.message };
+    return { ok: true };
+}
+
+/* ---------------- WELCOME EMAIL ---------------- */
 async function sendWelcomeEmail({ to, fullName }) {
-    const firstName = (fullName || "there").trim().split(" ")[0];
+    const safeFirst = escapeHtml((fullName || "there").trim().split(" ")[0] || "there");
 
     const html = `
     <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:32px 16px;">
@@ -48,7 +191,7 @@ async function sendWelcomeEmail({ to, fullName }) {
                 <h1 style="color:#ffffff;font-size:20px;margin:0;">My Investment</h1>
             </div>
             <div style="padding:32px;">
-                <h2 style="color:#08090d;font-size:22px;margin:0 0 16px;">Welcome, ${firstName}!</h2>
+                <h2 style="color:#08090d;font-size:22px;margin:0 0 16px;">Welcome, ${safeFirst}!</h2>
                 <p style="color:#5b6473;font-size:15px;line-height:1.6;margin:0 0 16px;">
                     Thank you for joining <strong>My Investment</strong>. Your email address has been successfully verified, and your account is now fully activated.
                 </p>
@@ -60,9 +203,6 @@ async function sendWelcomeEmail({ to, fullName }) {
                         Go to Dashboard
                     </a>
                 </div>
-                <p style="color:#5b6473;font-size:15px;line-height:1.6;margin:0 0 8px;">
-                    If you have any questions, our support team is here to assist you at any time.
-                </p>
                 <p style="color:#5b6473;font-size:15px;line-height:1.6;margin:0;">
                     Welcome aboard,<br/>
                     <strong>The My Investment Team</strong>
@@ -83,16 +223,68 @@ async function sendWelcomeEmail({ to, fullName }) {
             subject: "Welcome to My Investment — Your Account Is Verified",
             html
         });
-
-        if (error) console.error("❌ Welcome email failed:", error);
+        if (error) {
+            console.error("❌ Welcome email failed:", error);
+            return { ok: false, error };
+        }
+        return { ok: true };
     } catch (err) {
         console.error("❌ Welcome email exception:", err);
+        return { ok: false, error: err };
     }
 }
 
-/* ---------------- HOME ---------------- */
+/* ---------------- CODE STORAGE HELPERS ---------------- */
+/**
+ * We store verification codes in `password_resets` and distinguish by `purpose`:
+ *  - "signup"
+ *  - "password_reset"
+ *  - "withdrawal"
+ *
+ * NOTE: requires `purpose` column on password_resets. If it doesn't exist,
+ * queries still work (Postgres ignores unknown filter only if you don't filter),
+ * so to stay compatible we filter manually after fetch where possible.
+ */
+async function saveCode(email, code, purpose) {
+    const expiresAt = new Date(Date.now() + CODE_EXPIRY).toISOString();
+    const { error } = await supabase
+        .from("password_resets")
+        .upsert([{ email, code, expires_at: expiresAt, purpose }], { onConflict: "email" });
+    if (error) {
+        console.error("saveCode error:", error);
+        // Retry without purpose column (legacy schema)
+        const { error: e2 } = await supabase
+            .from("password_resets")
+            .upsert([{ email, code, expires_at: expiresAt }], { onConflict: "email" });
+        if (e2) throw e2;
+    }
+}
+
+async function fetchCode(email) {
+    const { data, error } = await supabase
+        .from("password_resets")
+        .select("*")
+        .eq("email", email)
+        .maybeSingle();
+    if (error) return { ok: false, error };
+    return { ok: true, data };
+}
+
+async function consumeCode(email) {
+    await supabase.from("password_resets").delete().eq("email", email);
+}
+
+/* ---------------- HOME / HEALTH ---------------- */
 app.get("/", (req, res) => {
     res.json({ success: true, message: "🚀 Backend is running" });
+});
+
+app.get("/health", async (req, res) => {
+    const { error } = await supabase.from("users").select("id").limit(1);
+    if (error) {
+        return res.status(503).json({ success: false, message: "DB unavailable" });
+    }
+    res.json({ success: true, message: "OK" });
 });
 
 async function checkDB() {
@@ -101,58 +293,55 @@ async function checkDB() {
     else console.log("✅ Database connected successfully");
 }
 
-/* ---------------- TEST ---------------- */
-app.get("/test", async (req, res) => {
-    const { data, error } = await supabase.from("users").select("*");
-    if (error) return res.json({ success: false, error: error.message });
+/* ---------------- TEST (admin only) ---------------- */
+app.get("/test", adminRequired, async (req, res) => {
+    const { data, error } = await supabase.from("users").select("*").limit(5);
+    if (error) return serverError(res, error, "/test");
     res.json({ success: true, data });
 });
 
-/* ---------------- SIGNUP: SEND CODE ---------------- */
-app.post("/signup/send-code", async (req, res) => {
-    const { fullName, phone, country, email, password } = req.body;
-
-    if (!email) {
-        return res.status(400).json({ success: false, message: "Email is required." });
-    }
-
-    const { data: existingUser } = await supabase
-        .from("users")
-        .select("id")
-        .eq("email", email)
-        .single();
-
-    if (existingUser) {
-        return res.json({ success: false, message: "Email already exists." });
-    }
-
-    const { error: dbError } = await supabase
-        .from("users")
-        .insert([{ 
-            full_name: fullName, 
-            phone, 
-            country, 
-            email, 
-            password,
-            is_verified: false 
-        }]);
-
-    if (dbError) {
-        console.error("❌ DB INSERT ERROR:", dbError);
-        return res.status(500).json({ success: false, message: "Database error: " + dbError.message });
-    }
-
-    const code = crypto.randomInt(100000, 999999).toString();
-    const expiresAt = new Date(Date.now() + CODE_EXPIRY).toISOString();
-    
-    await supabase.from("password_resets").upsert([{ 
-        email: email, 
-        code: code, 
-        expires_at: expiresAt
-    }], { onConflict: 'email' });
-
+/* ==========================================================
+   SIGNUP
+========================================================== */
+app.post("/signup/send-code", codeLimiter, async (req, res) => {
     try {
-        const { data, error } = await resend.emails.send({
+        const { fullName, phone, country, email, password } = req.body;
+
+        if (!isEmail(email)) {
+            return res.status(400).json({ success: false, message: "A valid email is required." });
+        }
+        if (!password || String(password).length < 6) {
+            return res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
+        }
+
+        const { data: existingUser } = await supabase
+            .from("users").select("id,is_verified").eq("email", email).maybeSingle();
+
+        if (existingUser && existingUser.is_verified) {
+            return res.status(400).json({ success: false, message: "Email already exists." });
+        }
+
+        // If user exists but unverified, update their details (re-signup)
+        if (existingUser) {
+            await supabase.from("users").update({
+                full_name: fullName, phone, country, password
+            }).eq("id", existingUser.id);
+        } else {
+            const { error: dbError } = await supabase
+                .from("users")
+                .insert([{ full_name: fullName, phone, country, email, password, is_verified: false }]);
+            if (dbError) {
+                if (/duplicate|unique/i.test(dbError.message)) {
+                    return res.status(400).json({ success: false, message: "Email already exists." });
+                }
+                return serverError(res, dbError, "signup/send-code insert");
+            }
+        }
+
+        const code = crypto.randomInt(100000, 999999).toString();
+        await saveCode(email, code, "signup");
+
+        const { error } = await resend.emails.send({
             from: "My Investment <noreply@myinvestments.cfd>",
             to: email,
             subject: "Verify your My Investment account",
@@ -163,163 +352,149 @@ app.post("/signup/send-code", async (req, res) => {
                 <p>This code expires in 10 minutes.</p>
             `
         });
-
         if (error) {
             console.error("❌ RESEND ERROR:", error);
-            return res.status(500).json({ success: false, message: error.message || "Unable to send code." });
+            return res.status(500).json({ success: false, message: "Unable to send code." });
         }
 
         res.json({ success: true, message: "Verification code sent." });
     } catch (err) {
-        console.log("❌ CATCH ERROR:", err);
-        res.status(500).json({ success: false, message: "Unable to send code." });
+        return serverError(res, err, "signup/send-code");
     }
 });
 
-/* ---------------- SIGNUP: VERIFY (SMART TOKEN GENERATION) ---------------- */
-app.post("/signup/verify", async (req, res) => {
-    const { email, code } = req.body;
+app.post("/signup/verify", verifyLimiter, async (req, res) => {
+    try {
+        const { email, code } = req.body;
+        if (!isEmail(email) || !code) {
+            return res.status(400).json({ success: false, message: "Email and code are required." });
+        }
 
-    const { data: resetData, error } = await supabase
-        .from("password_resets")
-        .select("*")
-        .eq("email", email)
-        .single();
+        const fetched = await fetchCode(email);
+        if (!fetched.ok || !fetched.data) {
+            return res.status(401).json({ success: false, message: "Verification code not found or expired." });
+        }
+        const record = fetched.data;
 
-    if (error || !resetData) {
-        return res.status(401).json({ success: false, message: "Verification code not found or expired." });
+        if (new Date() > new Date(record.expires_at)) {
+            await consumeCode(email);
+            return res.status(401).json({ success: false, message: "Verification code has expired." });
+        }
+        if (record.code !== code) {
+            return res.status(401).json({ success: false, message: "Invalid verification code." });
+        }
+
+        const { error: updateError } = await supabase
+            .from("users").update({ is_verified: true }).eq("email", email);
+        if (updateError) return serverError(res, updateError, "signup/verify update");
+
+        await consumeCode(email);
+
+        const { data: verifiedUser } = await supabase
+            .from("users").select("id,full_name,email,is_admin").eq("email", email).maybeSingle();
+
+        // Send welcome email (fire-and-forget, but log failures)
+        await sendWelcomeEmail({ to: email, fullName: verifiedUser?.full_name });
+
+        // Issue JWT so the client doesn't need a separate login
+        const token = verifiedUser ? signToken(verifiedUser) : null;
+
+        res.json({
+            success: true,
+            message: "Email verified successfully.",
+            token,
+            user: verifiedUser
+                ? {
+                      id: verifiedUser.id,
+                      full_name: verifiedUser.full_name,
+                      email: verifiedUser.email,
+                      is_admin: !!verifiedUser.is_admin
+                  }
+                : null
+        });
+    } catch (err) {
+        return serverError(res, err, "signup/verify");
     }
-
-    if (new Date() > new Date(resetData.expires_at)) {
-        await supabase.from("password_resets").delete().eq("email", email);
-        return res.status(401).json({ success: false, message: "Verification code has expired." });
-    }
-
-    if (resetData.code !== code) {
-        return res.status(401).json({ success: false, message: "Invalid verification code." });
-    }
-
-    // Mark user as verified
-    const { error: updateError } = await supabase
-        .from("users")
-        .update({ is_verified: true })
-        .eq("email", email);
-
-    if (updateError) {
-        return res.status(500).json({ success: false, message: "Failed to verify user." });
-    }
-
-    // ✉️ Send welcome notification (non-blocking)
-    const { data: verifiedUser } = await supabase
-        .from("users")
-        .select("full_name")
-        .eq("email", email)
-        .single();
-
-    await sendWelcomeEmail({
-        to: email,
-        fullName: verifiedUser?.full_name
-    });
-
-    // 💥 SMART TOKEN GENERATION
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
-
-    await supabase
-        .from("password_resets")
-        .update({ 
-            token: resetToken,
-            token_expires_at: tokenExpiresAt 
-        })
-        .eq("email", email);
-
-    res.json({ 
-        success: true, 
-        message: "Email verified successfully.",
-        reset_token: resetToken
-    });
 });
 
-/* ---------------- SIGNUP (DIRECT) ---------------- */
-app.post("/signup", async (req, res) => {
-    const { fullName, phone, country, email, password } = req.body;
-
-    if (!fullName || !phone || !country || !email || !password) {
-        return res.status(400).json({ success: false, message: "All fields are required." });
+/**
+ * Direct signup — REMOVED from the public API (was bypassing verification).
+ * If you truly need it, gate it behind ADMIN_SECRET env var.
+ */
+app.post("/signup-direct", async (req, res) => {
+    if (!process.env.ADMIN_SECRET || req.headers["x-admin-secret"] !== process.env.ADMIN_SECRET) {
+        return res.status(404).json({ success: false, message: "Not found." });
     }
+    try {
+        const { fullName, phone, country, email, password } = req.body;
+        if (!fullName || !phone || !country || !isEmail(email) || !password) {
+            return res.status(400).json({ success: false, message: "All fields are required." });
+        }
+        const { data: existing } = await supabase
+            .from("users").select("id").eq("email", email).maybeSingle();
+        if (existing) return res.status(400).json({ success: false, message: "Email already exists." });
 
-    const { data: existingUser } = await supabase
-        .from("users")
-        .select("id")
-        .eq("email", email)
-        .single();
+        const { data, error } = await supabase
+            .from("users")
+            .insert([{ full_name: fullName, phone, country, email, password, is_verified: true }])
+            .select();
+        if (error) return serverError(res, error, "signup-direct");
 
-    if (existingUser) {
-        return res.status(400).json({ success: false, message: "Email already exists." });
+        await sendWelcomeEmail({ to: email, fullName });
+        res.json({ success: true, message: "Account created.", user: data });
+    } catch (err) {
+        return serverError(res, err, "signup-direct");
     }
+});
 
+/* ==========================================================
+   LOGIN
+========================================================== */
+app.post("/login", authLimiter, async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (!isEmail(email) || !password) {
+            return res.status(400).json({ success: false, message: "Email and password required." });
+        }
+
+        const { data, error } = await supabase
+            .from("users").select("*").eq("email", email).eq("password", password).maybeSingle();
+
+        if (error || !data) {
+            return res.status(401).json({ success: false, message: "Invalid email or password." });
+        }
+        if (data.is_verified === false) {
+            return res.status(403).json({ success: false, message: "Please verify your email address before logging in." });
+        }
+        if (data.is_suspended) {
+            return res.status(403).json({ success: false, message: "Account suspended." });
+        }
+
+        const token = signToken(data);
+        res.json({
+            success: true,
+            message: "Login successful.",
+            is_admin: !!data.is_admin,
+            token,
+            user: data
+        });
+    } catch (err) {
+        return serverError(res, err, "login");
+    }
+});
+
+/* ==========================================================
+   USER (self or admin)
+========================================================== */
+app.get("/user/:id", selfOrAdmin("id"), async (req, res) => {
+    if (!isUuid(req.params.id)) {
+        return res.status(400).json({ success: false, message: "Invalid user id." });
+    }
     const { data, error } = await supabase
-        .from("users")
-        .insert([{ full_name: fullName, phone, country, email, password, is_verified: true }]) 
-        .select();
-
-    if (error) {
-        return res.status(500).json({ success: false, message: error.message });
-    }
-
-    // ✉️ Send welcome notification (account is auto-verified)
-    await sendWelcomeEmail({ to: email, fullName });
-
-    res.json({ success: true, message: "Account created.", user: data });
-});
-
-/* ---------------- LOGIN ---------------- */
-app.post("/login", async (req, res) => {
-    const { email, password } = req.body;
-
-    if (!email || !password) {
-        return res.status(400).json({ success: false, message: "Email and password required." });
-    }
-
-    const { data, error } = await supabase
-        .from("users")
-        .select("*")
-        .eq("email", email)
-        .eq("password", password)
-        .single();
-
-    if (error || !data) {
-        return res.status(401).json({ success: false, message: "Invalid email or password." });
-    }
-
-    if (data.is_verified === false) {
-        return res.status(403).json({ success: false, message: "Please verify your email address before logging in." });
-    }
-
-    if (data.is_suspended) {
-        return res.status(403).json({ success: false, message: "Account suspended." });
-    }
-
-    res.json({
-        success: true,
-        message: "Login successful.",
-        is_admin: data.is_admin,
-        user: data
-    });
-});
-
-/* ---------------- GET USER ---------------- */
-app.get("/user/:id", async (req, res) => {
-    const { data, error } = await supabase
-        .from("users")
-        .select("*")
-        .eq("id", req.params.id)
-        .single();
-
+        .from("users").select("*").eq("id", req.params.id).maybeSingle();
     if (error || !data) {
         return res.status(404).json({ success: false, message: "User not found." });
     }
-
     res.json({
         success: true,
         user: {
@@ -336,43 +511,25 @@ app.get("/user/:id", async (req, res) => {
 });
 
 /* ==========================================================
-   ★ FORGOT PASSWORD
+   FORGOT PASSWORD
 ========================================================== */
-app.post("/forgot-password", async (req, res) => {
-    const { email } = req.body;
-
-    if (!email) {
-        return res.status(400).json({ success: false, message: "Please enter your email address." });
-    }
-
-    const { data: user, error } = await supabase
-        .from("users")
-        .select("id,email")
-        .eq("email", email)
-        .single();
-
-    if (error || !user) {
-        return res.json({ success: false, message: "No account was found with that email address." });
-    }
-
-    const code = crypto.randomInt(100000, 999999).toString();
-    const expiresAt = new Date(Date.now() + CODE_EXPIRY).toISOString(); 
-
-    const { error: dbError } = await supabase
-        .from("password_resets")
-        .upsert([{ 
-            email: email, 
-            code: code, 
-            expires_at: expiresAt
-        }], { onConflict: 'email' });
-
-    if (dbError) {
-        console.log("DB Error:", dbError);
-        return res.status(500).json({ success: false, message: "Database error." });
-    }
-
+app.post("/forgot-password", codeLimiter, async (req, res) => {
     try {
-        const { data, error } = await resend.emails.send({
+        const { email } = req.body;
+        if (!isEmail(email)) {
+            return res.status(400).json({ success: false, message: "Please enter a valid email address." });
+        }
+
+        const { data: user } = await supabase
+            .from("users").select("id,email").eq("email", email).maybeSingle();
+        if (!user) {
+            return res.json({ success: false, message: "No account was found with that email address." });
+        }
+
+        const code = crypto.randomInt(100000, 999999).toString();
+        await saveCode(email, code, "password_reset");
+
+        const { error } = await resend.emails.send({
             from: "My Investment <noreply@myinvestments.cfd>",
             to: email,
             subject: "My Investment Password Reset Code",
@@ -383,125 +540,99 @@ app.post("/forgot-password", async (req, res) => {
                 <p>This code expires in 10 minutes.</p>
             `
         });
-
         if (error) {
             console.error("❌ RESEND ERROR:", error);
-            return res.status(500).json({ success: false, message: error.message || "Unable to send code." });
+            return res.status(500).json({ success: false, message: "Unable to send code." });
         }
-
         res.json({ success: true, message: "Verification code sent successfully." });
     } catch (err) {
-        console.log("❌ CATCH ERROR:", err);
-        res.status(500).json({ success: false, message: "Unable to send code." });
+        return serverError(res, err, "forgot-password");
     }
 });
 
-/* ---------------- VERIFY CODE (For Forgot Password) ---------------- */
-app.post("/verify-code", async (req, res) => {
-    const { email, code } = req.body;
-
-    if (!email || !code) {
-        return res.status(400).json({ success: false, message: "Email and code are required." });
-    }
-
-    const { data: resetData, error } = await supabase
-        .from("password_resets")
-        .select("*")
-        .eq("email", email)
-        .single();
-
-    if (error || !resetData) {
-        return res.status(401).json({ success: false, message: "No reset request found for this email." });
-    }
-
-    if (new Date() > new Date(resetData.expires_at)) {
-        await supabase.from("password_resets").delete().eq("email", email);
-        return res.status(401).json({ success: false, message: "Verification code expired. Request a new one." });
-    }
-
-    if (resetData.code !== code) {
-        return res.status(401).json({ success: false, message: "Invalid verification code." });
-    }
-
-    // 💥 SMART TOKEN GENERATION
-    const resetToken = crypto.randomBytes(32).toString('hex');
-    const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-
-    await supabase
-        .from("password_resets")
-        .update({ 
-            token: resetToken,
-            token_expires_at: tokenExpiresAt 
-        })
-        .eq("email", email);
-
-    res.json({ 
-        success: true, 
-        message: "Verification successful.",
-        reset_token: resetToken
-    });
-});
-
-/* ---------------- RESET PASSWORD (SMART TOKEN CHECK) ---------------- */
-app.post("/reset-password", async (req, res) => {
-    const { email, password, token } = req.body;
-
-    if (!email || !password || !token) {
-        return res.status(400).json({ success: false, message: "Missing required fields." });
-    }
-
-    // Check if the token is valid and unexpired
-    const { data: resetData, error: codeErr } = await supabase
-        .from("password_resets")
-        .select("*")
-        .eq("email", email)
-        .eq("token", token)
-        .single();
-
-    if (codeErr || !resetData) {
-        return res.status(403).json({ success: false, message: "Invalid or expired reset session. Please request a new code." });
-    }
-
-    if (new Date() > new Date(resetData.token_expires_at)) {
-        await supabase.from("password_resets").delete().eq("email", email);
-        return res.status(403).json({ success: false, message: "Session expired. Please request a new code." });
-    }
-
-    // Update the password
-    const { error: updateError } = await supabase
-        .from("users")
-        .update({ password: password })
-        .eq("email", email);
-
-    if (updateError) {
-        return res.status(500).json({ success: false, message: updateError.message });
-    }
-
-    // Delete the record so the token can't be reused
-    await supabase.from("password_resets").delete().eq("email", email);
-
-    res.json({ success: true, message: "Password reset successfully." });
-});
-
-/* ---------------- WITHDRAW: SEND CODE ---------------- */
-app.post("/withdraw/send-code", async (req, res) => {
-    const { email } = req.body;
-
-    if (!email) {
-        return res.status(400).json({ success: false, message: "Email is required." });
-    }
-
-    const code = crypto.randomInt(100000, 999999).toString();
-    const expiresAt = new Date(Date.now() + CODE_EXPIRY).toISOString();
-    
-    await supabase.from("password_resets").upsert([{ 
-        email: email, 
-        code: code, 
-        expires_at: expiresAt
-    }], { onConflict: 'email' });
-
+app.post("/verify-code", verifyLimiter, async (req, res) => {
     try {
-        const { data, error } = await resend.emails.send({
+        const { email, code } = req.body;
+        if (!isEmail(email) || !code) {
+            return res.status(400).json({ success: false, message: "Email and code are required." });
+        }
+
+        const fetched = await fetchCode(email);
+        if (!fetched.ok || !fetched.data) {
+            return res.status(401).json({ success: false, message: "No reset request found for this email." });
+        }
+        const record = fetched.data;
+        if (new Date() > new Date(record.expires_at)) {
+            await consumeCode(email);
+            return res.status(401).json({ success: false, message: "Verification code expired. Request a new one." });
+        }
+        if (record.code !== code) {
+            return res.status(401).json({ success: false, message: "Invalid verification code." });
+        }
+
+        const resetToken = crypto.randomBytes(32).toString("hex");
+        const tokenExpiresAt = new Date(Date.now() + TOKEN_EXPIRY).toISOString();
+
+        const { error: updErr } = await supabase
+            .from("password_resets")
+            .update({ token: resetToken, token_expires_at: tokenExpiresAt })
+            .eq("email", email);
+        if (updErr) return serverError(res, updErr, "verify-code update");
+
+        res.json({ success: true, message: "Verification successful.", reset_token: resetToken });
+    } catch (err) {
+        return serverError(res, err, "verify-code");
+    }
+});
+
+app.post("/reset-password", authLimiter, async (req, res) => {
+    try {
+        const { email, password, token } = req.body;
+        if (!isEmail(email) || !password || !token) {
+            return res.status(400).json({ success: false, message: "Missing required fields." });
+        }
+        if (String(password).length < 6) {
+            return res.status(400).json({ success: false, message: "Password must be at least 6 characters." });
+        }
+
+        const { data: record, error } = await supabase
+            .from("password_resets").select("*")
+            .eq("email", email).eq("token", token).maybeSingle();
+
+        if (error || !record) {
+            return res.status(403).json({ success: false, message: "Invalid or expired reset session. Please request a new code." });
+        }
+        if (!record.token_expires_at || new Date() > new Date(record.token_expires_at)) {
+            await consumeCode(email);
+            return res.status(403).json({ success: false, message: "Session expired. Please request a new code." });
+        }
+
+        const { error: updateError } = await supabase
+            .from("users").update({ password }).eq("email", email);
+        if (updateError) return serverError(res, updateError, "reset-password update");
+
+        await consumeCode(email);
+        res.json({ success: true, message: "Password reset successfully." });
+    } catch (err) {
+        return serverError(res, err, "reset-password");
+    }
+});
+
+/* ==========================================================
+   WITHDRAW
+========================================================== */
+app.post("/withdraw/send-code", codeLimiter, authRequired, async (req, res) => {
+    try {
+        // Use authed user's email — do NOT trust body
+        const email = req.user.email;
+        if (!isEmail(email)) {
+            return res.status(400).json({ success: false, message: "Invalid email on account." });
+        }
+
+        const code = crypto.randomInt(100000, 999999).toString();
+        await saveCode(email, code, "withdrawal");
+
+        const { error } = await resend.emails.send({
             from: "My Investment <noreply@myinvestments.cfd>",
             to: email,
             subject: "My Investment Withdrawal Verification",
@@ -512,160 +643,171 @@ app.post("/withdraw/send-code", async (req, res) => {
                 <p>This code expires in 10 minutes.</p>
             `
         });
-
         if (error) {
             console.error("❌ RESEND ERROR:", error);
-            return res.status(500).json({ success: false, message: error.message || "Unable to send code." });
+            return res.status(500).json({ success: false, message: "Unable to send code." });
         }
-
         res.json({ success: true, message: "Verification code sent successfully." });
     } catch (err) {
-        console.log("❌ CATCH ERROR:", err);
-        res.status(500).json({ success: false, message: "Unable to send code." });
+        return serverError(res, err, "withdraw/send-code");
     }
 });
 
-/* ---------------- CREATE WITHDRAWAL ---------------- */
-app.post("/withdraw/create", async (req, res) => {
-    const { user_id, email, code, method, wallet_address, amount } = req.body;
+app.post("/withdraw/create", authRequired, async (req, res) => {
+    try {
+        // user_id and email from token — NOT body
+        const userId = req.user.sub;
+        const email = req.user.email;
+        const { code, method, wallet_address, amount } = req.body;
 
-    if (!user_id || !email || !code || !method || !wallet_address || !amount) {
-        return res.status(400).json({ success: false, message: "All fields are required." });
+        if (!code || !method || !wallet_address || !amount) {
+            return res.status(400).json({ success: false, message: "All fields are required." });
+        }
+        if (!isPositiveNumber(amount)) {
+            return res.status(400).json({ success: false, message: "Invalid withdrawal amount." });
+        }
+        const numericAmount = Number(String(amount).replace(/,/g, "").trim());
+
+        const { data: userRow, error: balErr } = await supabase
+            .from("users").select("balance").eq("id", userId).maybeSingle();
+        if (balErr || !userRow) {
+            return res.status(404).json({ success: false, message: "User not found." });
+        }
+        const userBalance = Number(userRow.balance || 0);
+        if (numericAmount > userBalance) {
+            return res.status(400).json({
+                success: false,
+                message: `Insufficient balance. Available: $${userBalance.toFixed(2)}`
+            });
+        }
+
+        const fetched = await fetchCode(email);
+        if (!fetched.ok || !fetched.data) {
+            return res.status(401).json({ success: false, message: "Verification code not found." });
+        }
+        const record = fetched.data;
+        if (new Date() > new Date(record.expires_at)) {
+            await consumeCode(email);
+            return res.status(401).json({ success: false, message: "Verification code expired." });
+        }
+        if (record.code !== code) {
+            return res.status(401).json({ success: false, message: "Invalid verification code." });
+        }
+
+        // Reserve funds atomically by debiting balance at create time (safer than at approve)
+        const debit = await adjustBalance(userId, -numericAmount);
+        if (!debit.ok) {
+            return res.status(500).json({ success: false, message: "Could not reserve balance." });
+        }
+
+        const { data: txnData, error: txnError } = await supabase
+            .from("transactions")
+            .insert([{
+                user_id: userId,
+                type: "Withdrawal",
+                amount: numericAmount,
+                status: "Pending",
+                description: `${method} Withdrawal`
+            }])
+            .select();
+        if (txnError) {
+            // rollback balance
+            await adjustBalance(userId, numericAmount);
+            return serverError(res, txnError, "withdraw/create txn");
+        }
+        const transactionId = txnData?.[0]?.id ?? null;
+
+        const { data, error } = await supabase
+            .from("withdrawals")
+            .insert([{
+                user_id: userId,
+                method,
+                wallet_address,
+                amount: numericAmount,
+                status: "Pending",
+                transaction_id: transactionId
+            }])
+            .select();
+        if (error) {
+            await adjustBalance(userId, numericAmount);
+            await supabase.from("transactions").delete().eq("id", transactionId);
+            return serverError(res, error, "withdraw/create insert");
+        }
+
+        await consumeCode(email);
+        res.json({ success: true, message: "Withdrawal request submitted successfully.", withdrawal: data });
+    } catch (err) {
+        return serverError(res, err, "withdraw/create");
     }
+});
 
-    const numericAmount = Number(String(amount).replace(/,/g, "").trim());
-    if (isNaN(numericAmount) || numericAmount <= 0) {
-        return res.status(400).json({ success: false, message: "Invalid withdrawal amount." });
-    }
+/* ==========================================================
+   ADMIN — STATS
+========================================================== */
+app.get("/admin/stats", adminRequired, async (req, res) => {
+    try {
+        const { count: totalUsers } = await supabase
+            .from("users").select("*", { count: "exact", head: true }).eq("is_admin", false);
 
-    const { data: balanceCheck, error: balErr } = await supabase
-        .from("users")
-        .select("balance")
-        .eq("id", user_id)
-        .single();
+        const { data: balanceRows } = await supabase.from("users").select("balance").eq("is_admin", false);
+        const totalBalance = (balanceRows || []).reduce((s, r) => s + Number(r.balance || 0), 0);
 
-    if (balErr || !balanceCheck) {
-        return res.status(404).json({ success: false, message: "User not found." });
-    }
+        const { count: pendingDeposits } = await supabase
+            .from("deposits").select("*", { count: "exact", head: true }).eq("status", "Pending");
+        const { count: pendingWithdrawals } = await supabase
+            .from("withdrawals").select("*", { count: "exact", head: true }).eq("status", "Pending");
 
-    const userBalance = Number(balanceCheck.balance || 0);
-    if (numericAmount > userBalance) {
-        return res.status(400).json({
-            success: false,
-            message: `Insufficient balance. Available: $${userBalance.toFixed(2)}`
+        const { data: approvedDeposits } = await supabase
+            .from("deposits").select("amount").eq("status", "Approved");
+        const { data: approvedWithdrawals } = await supabase
+            .from("withdrawals").select("amount").eq("status", "Approved");
+
+        res.json({
+            totalUsers: totalUsers || 0,
+            totalBalance,
+            pendingDeposits: pendingDeposits || 0,
+            pendingWithdrawals: pendingWithdrawals || 0,
+            totalDeposits: (approvedDeposits || []).reduce((s, r) => s + Number(r.amount || 0), 0),
+            totalWithdrawals: (approvedWithdrawals || []).reduce((s, r) => s + Number(r.amount || 0), 0)
         });
+    } catch (err) {
+        return serverError(res, err, "admin/stats");
     }
-
-    const { data: resetData, error: codeErr } = await supabase
-        .from("password_resets")
-        .select("*")
-        .eq("email", email)
-        .single();
-
-    if (codeErr || !resetData) {
-        return res.status(401).json({ success: false, message: "Verification code not found." });
-    }
-
-    if (new Date() > new Date(resetData.expires_at)) {
-        await supabase.from("password_resets").delete().eq("email", email);
-        return res.status(401).json({ success: false, message: "Verification code expired." });
-    }
-
-    if (resetData.code !== code) {
-        return res.status(401).json({ success: false, message: "Invalid verification code." });
-    }
-
-    const cleanAmount = numericAmount;
-
-    const { data: txnData, error: txnError } = await supabase
-        .from("transactions")
-        .insert([{
-            user_id,
-            type: "Withdrawal",
-            amount: cleanAmount,
-            status: "Pending",
-            description: "Bitcoin Withdrawal"
-        }])
-        .select();
-
-    if (txnError) {
-        console.log("Transaction create error:", txnError);
-        return res.status(500).json({ success: false, message: "Could not create withdrawal transaction." });
-    }
-
-    const transactionId = txnData && txnData[0] ? txnData[0].id : null;
-
-    const { data, error } = await supabase
-        .from("withdrawals")
-        .insert([{
-            user_id,
-            method,
-            wallet_address,
-            amount: cleanAmount,
-            status: "Pending",
-            transaction_id: transactionId
-        }])
-        .select();
-
-    if (error) {
-        return res.status(500).json({ success: false, message: error.message });
-    }
-
-    await supabase.from("password_resets").delete().eq("email", email);
-
-    res.json({
-        success: true,
-        message: "Withdrawal request submitted successfully.",
-        withdrawal: data
-    });
 });
 
-/* ---------------- ADMIN STATS ---------------- */
-app.get("/admin/stats", async (req, res) => {
-    const { count: totalUsers } = await supabase
-        .from("users")
-        .select("*", { count: "exact", head: true })
-        .eq("is_admin", false);
-
-    res.json({ totalUsers: totalUsers || 0, totalBalance: 0, deposits: 0, withdrawals: 0 });
-});
-
-/* ---------------- ADMIN WITHDRAWALS ---------------- */
-app.get("/admin/withdrawals", async (req, res) => {
+/* ---------------- ADMIN — WITHDRAWALS ---------------- */
+app.get("/admin/withdrawals", adminRequired, async (req, res) => {
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const offset = Number(req.query.offset) || 0;
     const { data, error } = await supabase
         .from("withdrawals")
         .select(`*, users (full_name, email)`)
-        .order("created_at", { ascending: false });
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
-
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limit - 1);
+    if (error) return serverError(res, error, "admin/withdrawals");
     res.json({
         success: true,
         withdrawals: (data || []).map(w => ({ ...w, amount_display: formatMoney(w.amount) }))
     });
 });
 
-/* ---------------- ADMIN UNREAD WITHDRAWALS ---------------- */
-app.get("/admin/unread-withdrawals", async (req, res) => {
+app.get("/admin/unread-withdrawals", adminRequired, async (req, res) => {
     const { count, error } = await supabase
-        .from("withdrawals")
-        .select("*", { count: "exact", head: true })
-        .eq("status", "Pending");
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
+        .from("withdrawals").select("*", { count: "exact", head: true }).eq("status", "Pending");
+    if (error) return serverError(res, error, "admin/unread-withdrawals");
     res.json({ success: true, count: count || 0 });
 });
 
-/* ---------------- ADMIN GET SINGLE USER ---------------- */
-app.get("/admin/user/:id", async (req, res) => {
+/* ---------------- ADMIN — USERS ---------------- */
+app.get("/admin/user/:id", adminRequired, async (req, res) => {
+    if (!isUuid(req.params.id)) {
+        return res.status(400).json({ success: false, message: "Invalid user id." });
+    }
     const { data, error } = await supabase
         .from("users")
         .select(`id, full_name, email, balance, total_trade, assets, active_assets, btc_balance, eth_balance, usdt_balance, is_suspended`)
-        .eq("id", req.params.id)
-        .single();
-
+        .eq("id", req.params.id).maybeSingle();
     if (error || !data) return res.status(404).json({ success: false, message: "User not found" });
-
     res.json({
         success: true,
         user: {
@@ -681,62 +823,65 @@ app.get("/admin/user/:id", async (req, res) => {
     });
 });
 
-/* ---------------- ADMIN UPDATE USER ---------------- */
-app.put("/admin/user/:id", async (req, res) => {
-    const userId = req.params.id;
-    const { balance, total_trade, assets, active_assets, btc_balance, eth_balance, usdt_balance, is_suspended } = req.body;
+app.put("/admin/user/:id", adminRequired, async (req, res) => {
+    try {
+        const userId = req.params.id;
+        if (!isUuid(userId)) {
+            return res.status(400).json({ success: false, message: "Invalid user id." });
+        }
+        const {
+            balance, total_trade, assets, active_assets,
+            btc_balance, eth_balance, usdt_balance, is_suspended, note
+        } = req.body;
 
-    const { data: existingUser, error: fetchError } = await supabase
-        .from("users")
-        .select("balance")
-        .eq("id", userId)
-        .single();
+        const { data: existing, error: fetchError } = await supabase
+            .from("users").select("balance").eq("id", userId).maybeSingle();
+        if (fetchError || !existing) {
+            return res.status(404).json({ success: false, message: "User not found." });
+        }
+        const oldBalance = Number(existing.balance || 0);
+        const newBalance = cleanNumber(balance);
+        const difference = Number(newBalance || 0) - oldBalance;
 
-    if (fetchError || !existingUser) {
-        return res.status(404).json({ success: false, message: "User not found." });
-    }
+        const { data, error } = await supabase
+            .from("users")
+            .update({
+                balance: newBalance,
+                total_trade: cleanNumber(total_trade),
+                assets: cleanNumber(assets),
+                active_assets: cleanNumber(active_assets),
+                btc_balance: cleanNumber(btc_balance),
+                eth_balance: cleanNumber(eth_balance),
+                usdt_balance: cleanNumber(usdt_balance),
+                is_suspended
+            })
+            .eq("id", userId)
+            .select();
+        if (error) return serverError(res, error, "admin/user update");
 
-    const oldBalance = Number(existingUser.balance || 0);
-    const newBalance = cleanNumber(balance);
-    const difference = Number(newBalance || 0) - oldBalance;
-
-    const { data, error } = await supabase
-        .from("users")
-        .update({
-            balance: newBalance,
-            total_trade: cleanNumber(total_trade),
-            assets: cleanNumber(assets),
-            active_assets: cleanNumber(active_assets),
-            btc_balance: cleanNumber(btc_balance),
-            eth_balance: cleanNumber(eth_balance),
-            usdt_balance: cleanNumber(usdt_balance),
-            is_suspended
-        })
-        .eq("id", userId)
-        .select();
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
-
-    if (difference !== 0) {
-        const isCredit = difference > 0;
-        const absoluteAmount = Math.abs(difference);
-        const { error: txnError } = await supabase
-            .from("transactions")
-            .insert([{
+        if (difference !== 0) {
+            const isCredit = difference > 0;
+            const absoluteAmount = Math.abs(difference);
+            const desc = note && String(note).trim()
+                ? String(note).trim().slice(0, 200)
+                : (isCredit ? "Credit by My Investment" : "Account adjustment by My Investment");
+            const { error: txnError } = await supabase.from("transactions").insert([{
                 user_id: userId,
                 type: isCredit ? "Deposit" : "Withdrawal",
                 amount: absoluteAmount,
                 status: "Approved",
-                description: isCredit ? "Credit by My Investment" : "Account adjustment by My Investment"
+                description: desc
             }]);
-        if (txnError) console.log("Transaction log error:", txnError);
-    }
+            if (txnError) console.log("Transaction log error:", txnError);
+        }
 
-    res.json({ success: true, message: "User updated successfully", user: data });
+        res.json({ success: true, message: "User updated successfully", user: data });
+    } catch (err) {
+        return serverError(res, err, "admin/user update");
+    }
 });
 
-/* ---------------- ADMIN UPDATE USER ASSETS ---------------- */
-app.put("/admin/user-assets/:id", async (req, res) => {
+app.put("/admin/user-assets/:id", adminRequired, async (req, res) => {
     const { btc_balance, eth_balance, usdt_balance } = req.body;
     const { data, error } = await supabase
         .from("users")
@@ -747,21 +892,20 @@ app.put("/admin/user-assets/:id", async (req, res) => {
         })
         .eq("id", req.params.id)
         .select();
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
+    if (error) return serverError(res, error, "admin/user-assets");
     res.json({ success: true, message: "Assets updated successfully", user: data });
 });
 
-/* ---------------- ADMIN GET ALL USERS ---------------- */
-app.get("/admin/users", async (req, res) => {
+app.get("/admin/users", adminRequired, async (req, res) => {
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const offset = Number(req.query.offset) || 0;
     const { data, error } = await supabase
         .from("users")
         .select("*")
         .eq("is_admin", false)
-        .order("id", { ascending: false });
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
-
+        .order("id", { ascending: false })
+        .range(offset, offset + limit - 1);
+    if (error) return serverError(res, error, "admin/users");
     res.json({
         success: true,
         users: (data || []).map(u => ({
@@ -777,414 +921,411 @@ app.get("/admin/users", async (req, res) => {
     });
 });
 
-/* ---------------- CHANGE PASSWORD ---------------- */
-app.put("/change-password/:id", async (req, res) => {
-    const { old_password, new_password } = req.body;
+/* ==========================================================
+   CHANGE PASSWORD (self or admin)
+========================================================== */
+app.put("/change-password/:id", selfOrAdmin("id"), async (req, res) => {
+    try {
+        const { old_password, new_password } = req.body;
+        if (!old_password || !new_password) {
+            return res.status(400).json({ success: false, message: "All fields are required" });
+        }
+        if (String(new_password).length < 6) {
+            return res.status(400).json({ success: false, message: "New password must be at least 6 characters." });
+        }
 
-    if (!old_password || !new_password) {
-        return res.status(400).json({ success: false, message: "All fields are required" });
+        const { data: user, error } = await supabase
+            .from("users").select("*").eq("id", req.params.id).maybeSingle();
+        if (error || !user) return res.status(404).json({ success: false, message: "User not found" });
+        if (user.password !== old_password) {
+            return res.status(401).json({ success: false, message: "Old password incorrect" });
+        }
+
+        const { error: updateError } = await supabase
+            .from("users").update({ password: new_password }).eq("id", req.params.id);
+        if (updateError) return serverError(res, updateError, "change-password");
+        res.json({ success: true, message: "Password updated successfully" });
+    } catch (err) {
+        return serverError(res, err, "change-password");
     }
-
-    const { data: user, error } = await supabase
-        .from("users")
-        .select("*")
-        .eq("id", req.params.id)
-        .single();
-
-    if (error || !user) return res.status(404).json({ success: false, message: "User not found" });
-    if (user.password !== old_password) return res.status(401).json({ success: false, message: "Old password incorrect" });
-
-    const { error: updateError } = await supabase
-        .from("users")
-        .update({ password: new_password })
-        .eq("id", req.params.id);
-
-    if (updateError) return res.status(500).json({ success: false, message: updateError.message });
-    res.json({ success: true, message: "Password updated successfully" });
 });
 
-/* ---------------- CREATE DEPOSIT (UPDATED FOR DYNAMIC METHOD) ---------------- */
-app.post("/deposit", upload.single("receipt"), async (req, res) => {
-    // 1. Extract payment_method from the frontend
-    const { user_id, amount, payment_method } = req.body;
+/* ==========================================================
+   DEPOSIT
+========================================================== */
+app.post("/deposit", authRequired, upload.single("receipt"), async (req, res) => {
+    try {
+        const userId = req.user.sub;
+        const { amount, payment_method } = req.body;
 
-    if (!req.file) return res.status(400).json({ success: false, message: "Receipt is required." });
+        if (!req.file) return res.status(400).json({ success: false, message: "Receipt is required." });
+        if (!isPositiveNumber(amount)) {
+            return res.status(400).json({ success: false, message: "Invalid deposit amount." });
+        }
+        const numericAmount = Number(String(amount).replace(/,/g, "").trim());
 
-    const numericAmount = Number(String(amount || "").replace(/,/g, "").trim());
-    if (isNaN(numericAmount) || numericAmount <= 0) {
-        return res.status(400).json({ success: false, message: "Invalid deposit amount." });
+        const ext = (req.file.originalname.split(".").pop() || "bin").replace(/[^a-zA-Z0-9]/g, "").slice(0, 6);
+        const fileName = `${userId}/${crypto.randomUUID()}.${ext}`;
+
+        const { error: uploadError } = await supabase.storage
+            .from("receipts")
+            .upload(fileName, req.file.buffer, { contentType: req.file.mimetype });
+        if (uploadError) return serverError(res, uploadError, "deposit upload");
+
+        const { data: publicUrl } = supabase.storage.from("receipts").getPublicUrl(fileName);
+        const receipt_url = publicUrl.publicUrl;
+
+        const method = (payment_method || "Crypto").toString().slice(0, 40);
+        const description = `${method} Deposit`;
+
+        const { data: txnData, error: transactionError } = await supabase
+            .from("transactions")
+            .insert([{ user_id: userId, type: "Deposit", amount: numericAmount, status: "Pending", description }])
+            .select();
+        if (transactionError) return serverError(res, transactionError, "deposit txn");
+        const transactionId = txnData?.[0]?.id ?? null;
+
+        const { data, error } = await supabase
+            .from("deposits")
+            .insert([{
+                user_id: userId,
+                amount: numericAmount,
+                receipt_url,
+                status: "Pending",
+                transaction_id: transactionId,
+                payment_method: method
+            }])
+            .select();
+        if (error) {
+            await supabase.from("transactions").delete().eq("id", transactionId);
+            return serverError(res, error, "deposit insert");
+        }
+
+        res.json({ success: true, message: "Deposit submitted successfully.", deposit: data });
+    } catch (err) {
+        return serverError(res, err, "deposit");
     }
-
-    const fileName = `${Date.now()}-${req.file.originalname}`;
-
-    const { error: uploadError } = await supabase.storage
-        .from("receipts")
-        .upload(fileName, req.file.buffer, { contentType: req.file.mimetype });
-
-    if (uploadError) return res.status(500).json({ success: false, message: uploadError.message });
-
-    const { data: publicUrl } = supabase.storage.from("receipts").getPublicUrl(fileName);
-    const receipt_url = publicUrl.publicUrl;
-
-    if (!user_id || !amount || !receipt_url) {
-        return res.status(400).json({ success: false, message: "All fields are required." });
-    }
-
-    const cleanAmount = numericAmount;
-    
-    // 2. Use the actual payment method provided
-    const description = `${payment_method || 'Crypto'} Deposit`;
-
-    const { data: txnData, error: transactionError } = await supabase
-        .from("transactions")
-        .insert([{
-            user_id,
-            type: "Deposit",
-            amount: cleanAmount,
-            status: "Pending",
-            description: description 
-        }])
-        .select();
-
-    if (transactionError) {
-        return res.status(500).json({ success: false, message: "Could not create deposit transaction." });
-    }
-
-    const transactionId = txnData && txnData[0] ? txnData[0].id : null;
-
-    // 3. Save the payment_method to the deposits table
-    // (Make sure you add a `payment_method` column in Supabase first!)
-    const { data, error } = await supabase
-        .from("deposits")
-        .insert([{
-            user_id,
-            amount: cleanAmount,
-            receipt_url,
-            status: "Pending",
-            transaction_id: transactionId,
-            payment_method: payment_method 
-        }])
-        .select();
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
-
-    res.json({ success: true, message: "Deposit submitted successfully.", deposit: data });
 });
 
 /* ---------------- USER TRANSACTIONS ---------------- */
-app.get("/transactions/:userId", async (req, res) => {
+app.get("/transactions/:userId", selfOrAdmin("userId"), async (req, res) => {
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const offset = Number(req.query.offset) || 0;
     const { data, error } = await supabase
-        .from("transactions")
-        .select("*")
+        .from("transactions").select("*")
         .eq("user_id", req.params.userId)
-        .order("created_at", { ascending: false });
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
-
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limit - 1);
+    if (error) return serverError(res, error, "transactions");
     res.json({
         success: true,
         transactions: (data || []).map(t => ({ ...t, amount_display: formatMoney(t.amount) }))
     });
 });
 
-/* ---------------- ADMIN APPROVE WITHDRAWAL ---------------- */
-app.put("/admin/withdrawals/:id/approve", async (req, res) => {
-    const { data: withdrawal, error } = await supabase
-        .from("withdrawals")
-        .select("*")
-        .eq("id", req.params.id)
-        .single();
+/* ==========================================================
+   ADMIN — WITHDRAWAL APPROVE / REJECT / DELETE
+========================================================== */
+app.put("/admin/withdrawals/:id/approve", adminRequired, async (req, res) => {
+    try {
+        const { data: withdrawal, error } = await supabase
+            .from("withdrawals").select("*").eq("id", req.params.id).maybeSingle();
+        if (error || !withdrawal) return res.status(404).json({ success: false, message: "Withdrawal not found." });
+        if (withdrawal.status === "Approved") return res.status(400).json({ success: false, message: "Already approved." });
+        if (withdrawal.status === "Rejected") return res.status(400).json({ success: false, message: "Already rejected." });
 
-    if (error || !withdrawal) return res.status(404).json({ success: false, message: "Withdrawal not found." });
-    if (withdrawal.status === "Approved") return res.status(400).json({ success: false, message: "Already approved." });
-
-    const { data: user } = await supabase
-        .from("users")
-        .select("balance")
-        .eq("id", withdrawal.user_id)
-        .single();
-
-    const newBalance = Number(user.balance) - Number(withdrawal.amount);
-
-    await supabase.from("users").update({ balance: newBalance }).eq("id", withdrawal.user_id);
-    await supabase.from("withdrawals").update({ status: "Approved" }).eq("id", req.params.id);
-
-    if (withdrawal.transaction_id) {
-        await supabase.from("transactions").update({ status: "Approved" }).eq("id", withdrawal.transaction_id);
+        // Funds were reserved at create time — just flip status
+        await supabase.from("withdrawals").update({ status: "Approved" }).eq("id", req.params.id);
+        if (withdrawal.transaction_id) {
+            await supabase.from("transactions").update({ status: "Approved" }).eq("id", withdrawal.transaction_id);
+        }
+        res.json({ success: true, message: "Withdrawal approved." });
+    } catch (err) {
+        return serverError(res, err, "admin/withdrawals/approve");
     }
-
-    res.json({ success: true, message: "Withdrawal approved." });
 });
 
-/* ---------------- ADMIN REJECT WITHDRAWAL ---------------- */
-app.put("/admin/withdrawals/:id/reject", async (req, res) => {
-    const { data: withdrawal, error } = await supabase
-        .from("withdrawals")
-        .select("*")
-        .eq("id", req.params.id)
-        .single();
+app.put("/admin/withdrawals/:id/reject", adminRequired, async (req, res) => {
+    try {
+        const { data: withdrawal, error } = await supabase
+            .from("withdrawals").select("*").eq("id", req.params.id).maybeSingle();
+        if (error || !withdrawal) return res.status(404).json({ success: false, message: "Withdrawal not found." });
+        if (withdrawal.status === "Rejected") return res.status(400).json({ success: false, message: "Already rejected." });
+        if (withdrawal.status === "Approved") return res.status(400).json({ success: false, message: "Already approved — cannot reject." });
 
-    if (error || !withdrawal) return res.status(404).json({ success: false, message: "Withdrawal not found." });
-    if (withdrawal.status === "Rejected") return res.status(400).json({ success: false, message: "Already rejected." });
+        // Refund reserved balance
+        const refund = await adjustBalance(withdrawal.user_id, Number(withdrawal.amount));
+        if (!refund.ok) return res.status(500).json({ success: false, message: "Could not refund balance." });
 
-    await supabase.from("withdrawals").update({ status: "Rejected" }).eq("id", req.params.id);
-
-    if (withdrawal.transaction_id) {
-        await supabase.from("transactions").update({
-            status: "Rejected",
-            description: "Withdrawal rejected. Please contact support."
-        }).eq("id", withdrawal.transaction_id);
+        await supabase.from("withdrawals").update({ status: "Rejected" }).eq("id", req.params.id);
+        if (withdrawal.transaction_id) {
+            await supabase.from("transactions").update({
+                status: "Rejected",
+                description: "Withdrawal rejected. Please contact support."
+            }).eq("id", withdrawal.transaction_id);
+        }
+        res.json({ success: true, message: "Withdrawal rejected." });
+    } catch (err) {
+        return serverError(res, err, "admin/withdrawals/reject");
     }
-
-    res.json({ success: true, message: "Withdrawal rejected." });
 });
 
-/* ---------------- ADMIN DELETE WITHDRAWAL ---------------- */
-app.delete("/admin/withdrawals/:id", async (req, res) => {
+app.delete("/admin/withdrawals/:id", adminRequired, async (req, res) => {
     const { data: withdrawal, error } = await supabase
-        .from("withdrawals")
-        .select("*")
-        .eq("id", req.params.id)
-        .single();
-
+        .from("withdrawals").select("*").eq("id", req.params.id).maybeSingle();
     if (error || !withdrawal) return res.status(404).json({ success: false, message: "Withdrawal not found." });
 
+    // If still pending, refund the reserved funds
+    if (withdrawal.status === "Pending") {
+        await adjustBalance(withdrawal.user_id, Number(withdrawal.amount));
+    }
     const { error: deleteError } = await supabase.from("withdrawals").delete().eq("id", req.params.id);
-
-    if (deleteError) return res.status(500).json({ success: false, message: deleteError.message });
+    if (deleteError) return serverError(res, deleteError, "admin/withdrawals/delete");
+    if (withdrawal.transaction_id) {
+        await supabase.from("transactions").delete().eq("id", withdrawal.transaction_id);
+    }
     res.json({ success: true, message: "Withdrawal deleted successfully." });
 });
 
-/* ---------------- ADMIN DEPOSITS ---------------- */
-app.get("/admin/deposits", async (req, res) => {
+/* ==========================================================
+   ADMIN — DEPOSITS
+========================================================== */
+app.get("/admin/deposits", adminRequired, async (req, res) => {
+    const limit = Math.min(Number(req.query.limit) || 100, 500);
+    const offset = Number(req.query.offset) || 0;
     const { data: deposits, error } = await supabase
-        .from("deposits")
-        .select("*")
-        .order("created_at", { ascending: false });
+        .from("deposits").select("*")
+        .order("created_at", { ascending: false })
+        .range(offset, offset + limit - 1);
+    if (error) return serverError(res, error, "admin/deposits");
 
-    if (error) return res.status(500).json({ success: false, message: error.message });
-
-    for (const deposit of deposits) {
-        const { data: user } = await supabase
-            .from("users")
-            .select("full_name,email")
-            .eq("id", deposit.user_id)
-            .single();
-        deposit.users = user;
-        deposit.amount_display = formatMoney(deposit.amount);
+    const userIds = [...new Set((deposits || []).map(d => d.user_id).filter(Boolean))];
+    let usersById = {};
+    if (userIds.length) {
+        const { data: users } = await supabase
+            .from("users").select("id, full_name, email").in("id", userIds);
+        usersById = Object.fromEntries((users || []).map(u => [u.id, u]));
     }
 
-    res.json({ success: true, deposits });
+    res.json({
+        success: true,
+        deposits: (deposits || []).map(d => ({
+            ...d,
+            users: usersById[d.user_id] || null,
+            amount_display: formatMoney(d.amount)
+        }))
+    });
 });
 
-/* ---------------- ADMIN APPROVE DEPOSIT ---------------- */
-app.put("/admin/deposits/:id/approve", async (req, res) => {
-    const { data: deposit, error } = await supabase
-        .from("deposits")
-        .select("*")
-        .eq("id", req.params.id)
-        .single();
+/**
+ * Deposit approval — credits the CORRECT balance based on payment_method.
+ */
+app.put("/admin/deposits/:id/approve", adminRequired, async (req, res) => {
+    try {
+        const { data: deposit, error } = await supabase
+            .from("deposits").select("*").eq("id", req.params.id).maybeSingle();
+        if (error || !deposit) return res.status(404).json({ success: false, message: "Deposit not found." });
+        if (deposit.status === "Approved") return res.status(400).json({ success: false, message: "Already approved." });
+        if (deposit.status === "Rejected") return res.status(400).json({ success: false, message: "Already rejected." });
 
-    if (error || !deposit) return res.status(404).json({ success: false, message: "Deposit not found." });
-    if (deposit.status === "Approved") return res.status(400).json({ success: false, message: "Already approved." });
+        // 1. Always credit main balance atomically
+        const creditMain = await adjustBalance(deposit.user_id, Number(deposit.amount));
+        if (!creditMain.ok) return res.status(500).json({ success: false, message: "Could not credit balance." });
 
-    const { data: user } = await supabase
-        .from("users")
-        .select("balance, btc_balance")
-        .eq("id", deposit.user_id)
-        .single();
+        // 2. Credit the correct crypto balance based on payment method
+        const method = (deposit.payment_method || "BTC").toUpperCase();
+        const col = method.includes("ETH") ? "eth_balance"
+                  : method.includes("USDT") ? "usdt_balance"
+                  : "btc_balance";
 
-    const newBalance = Number(user.balance) + Number(deposit.amount);
-    const newBtcBalance = Number(user.btc_balance) + Number(deposit.amount);
+        // Use atomic-ish update via RPC if available, else read-then-write
+        const { error: rpcErr } = await supabase.rpc("increment_asset", {
+            p_user_id: deposit.user_id,
+            p_column: col,
+            p_delta: Number(deposit.amount)
+        });
+        if (rpcErr) {
+            // Fallback
+            const { data: u } = await supabase
+                .from("users").select(col).eq("id", deposit.user_id).single();
+            if (u) {
+                await supabase.from("users")
+                    .update({ [col]: Number(u[col] || 0) + Number(deposit.amount) })
+                    .eq("id", deposit.user_id);
+            }
+        }
 
-    await supabase.from("users").update({ balance: newBalance, btc_balance: newBtcBalance }).eq("id", deposit.user_id);
-    await supabase.from("deposits").update({ status: "Approved" }).eq("id", req.params.id);
+        await supabase.from("deposits").update({ status: "Approved" }).eq("id", req.params.id);
+        if (deposit.transaction_id) {
+            await supabase.from("transactions").update({ status: "Approved" }).eq("id", deposit.transaction_id);
+        }
 
-    if (deposit.transaction_id) {
-        await supabase.from("transactions").update({ status: "Approved" }).eq("id", deposit.transaction_id);
+        res.json({ success: true, message: "Deposit approved." });
+    } catch (err) {
+        return serverError(res, err, "admin/deposits/approve");
     }
-
-    res.json({ success: true, message: "Deposit approved." });
 });
 
-/* ---------------- ADMIN REJECT DEPOSIT ---------------- */
-app.put("/admin/deposits/:id/reject", async (req, res) => {
-    const { data: deposit, error } = await supabase
-        .from("deposits")
-        .select("*")
-        .eq("id", req.params.id)
-        .single();
+app.put("/admin/deposits/:id/reject", adminRequired, async (req, res) => {
+    try {
+        const { data: deposit, error } = await supabase
+            .from("deposits").select("*").eq("id", req.params.id).maybeSingle();
+        if (error || !deposit) return res.status(404).json({ success: false, message: "Deposit not found." });
+        if (deposit.status === "Rejected") return res.status(400).json({ success: false, message: "Already rejected." });
+        if (deposit.status === "Approved") return res.status(400).json({ success: false, message: "Already approved — cannot reject." });
 
-    if (error || !deposit) return res.status(404).json({ success: false, message: "Deposit not found." });
-    if (deposit.status === "Rejected") return res.status(400).json({ success: false, message: "Already rejected." });
-
-    await supabase.from("deposits").update({ status: "Rejected" }).eq("id", req.params.id);
-
-    if (deposit.transaction_id) {
-        await supabase.from("transactions").update({ status: "Rejected" }).eq("id", deposit.transaction_id);
+        await supabase.from("deposits").update({ status: "Rejected" }).eq("id", req.params.id);
+        if (deposit.transaction_id) {
+            await supabase.from("transactions").update({ status: "Rejected" }).eq("id", deposit.transaction_id);
+        }
+        res.json({ success: true, message: "Deposit rejected." });
+    } catch (err) {
+        return serverError(res, err, "admin/deposits/reject");
     }
-
-    res.json({ success: true, message: "Deposit rejected." });
 });
 
-/* ---------------- ADMIN NOTIFICATIONS ---------------- */
-app.get("/admin/notifications", async (req, res) => {
+/* ==========================================================
+   ADMIN — NOTIFICATIONS
+========================================================== */
+app.get("/admin/notifications", adminRequired, async (req, res) => {
     const { count: deposits } = await supabase
-        .from("deposits")
-        .select("*", { count: "exact", head: true })
-        .eq("status", "Pending");
-
+        .from("deposits").select("*", { count: "exact", head: true }).eq("status", "Pending");
     const { count: withdrawals } = await supabase
-        .from("withdrawals")
-        .select("*", { count: "exact", head: true })
-        .eq("status", "Pending");
+        .from("withdrawals").select("*", { count: "exact", head: true }).eq("status", "Pending");
+    const { count: unreadSupport } = await supabase
+        .from("support_messages").select("*", { count: "exact", head: true })
+        .eq("sender", "user").eq("is_read", false);
 
     res.json({
         success: true,
         pendingDeposits: deposits || 0,
-        pendingWithdrawals: withdrawals || 0
+        pendingWithdrawals: withdrawals || 0,
+        unreadSupport: unreadSupport || 0
     });
 });
 
-/* ---------------- SUPPORT ---------------- */
-app.get("/support/messages/:userId", async (req, res) => {
+/* ==========================================================
+   SUPPORT
+========================================================== */
+app.get("/support/messages/:userId", selfOrAdmin("userId"), async (req, res) => {
     const { data, error } = await supabase
-        .from("support_messages")
-        .select("*")
+        .from("support_messages").select("*")
         .eq("user_id", req.params.userId)
         .order("created_at", { ascending: true });
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
+    if (error) return serverError(res, error, "support/messages");
     res.json({ success: true, messages: data });
 });
 
-app.post("/support/messages", async (req, res) => {
-    const { user_id, message } = req.body;
-
-    if (!user_id || !message) {
-        return res.status(400).json({ success: false, message: "User ID and message are required." });
-    }
-
-    const { data, error } = await supabase
-        .from("support_messages")
-        .insert([{ user_id, sender: "user", message }])
-        .select()
-        .single();
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
-    res.json({ success: true, message: data });
-});
-
-/* ---------------- BTC ADDRESS ---------------- */
-app.get("/settings/btc-address", async (req, res) => {
-    const { data, error } = await supabase
-        .from("platform_settings")
-        .select("btc_deposit_address")
-        .limit(1)
-        .single();
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
-    res.json({ success: true, btc_deposit_address: data.btc_deposit_address || "" });
-});
-
-app.put("/admin/settings/btc-address", async (req, res) => {
-    const { btc_deposit_address } = req.body;
-
-    if (!btc_deposit_address || !btc_deposit_address.trim()) {
-        return res.status(400).json({ success: false, message: "BTC deposit address is required." });
-    }
-
-    const { data: existing, error: findError } = await supabase
-        .from("platform_settings")
-        .select("id")
-        .limit(1)
-        .single();
-
-    if (findError || !existing) return res.status(404).json({ success: false, message: "Platform settings not found." });
-
-    const { data, error } = await supabase
-        .from("platform_settings")
-        .update({
-            btc_deposit_address: btc_deposit_address.trim(),
-            updated_at: new Date().toISOString()
-        })
-        .eq("id", existing.id)
-        .select()
-        .single();
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
-    res.json({ success: true, message: "BTC deposit address updated.", settings: data });
-});
-
-/* ---------------- ADMIN CHAT ---------------- */
-app.get("/admin/support/users", async (req, res) => {
-    const { data, error } = await supabase
-        .from("support_messages")
-        .select("user_id")
-        .order("created_at", { ascending: false });
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
-    res.json({ success: true, users: [...new Set(data.map(m => m.user_id))] });
-});
-
-app.get("/admin/support/messages/:userId", async (req, res) => {
-    const { data, error } = await supabase
-        .from("support_messages")
-        .select("*")
-        .eq("user_id", req.params.userId)
-        .order("created_at", { ascending: true });
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
-    res.json({ success: true, messages: data });
-});
-
-app.get("/admin/support/unread", async (req, res) => {
-    const { count, error } = await supabase
-        .from("support_messages")
-        .select("*", { count: "exact", head: true })
-        .eq("sender", "user")
-        .eq("is_read", false);
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
-    res.json({ success: true, unread: count || 0 });
-});
-
-app.put("/admin/support/messages/:userId/read", async (req, res) => {
-    const { error } = await supabase
-        .from("support_messages")
-        .update({ is_read: true })
-        .eq("user_id", req.params.userId)
-        .eq("sender", "user")
-        .eq("is_read", false);
-
-    if (error) return res.status(500).json({ success: false, message: error.message });
-    res.json({ success: true, message: "Messages marked as read." });
-});
-
-app.post("/admin/support/messages", async (req, res) => {
+app.post("/support/messages", authRequired, async (req, res) => {
     try {
-        const { user_id, message } = req.body;
-
-        if (!user_id || !message) {
-            return res.status(400).json({ success: false, message: "User ID and message are required." });
+        const userId = req.user.sub;
+        const { message } = req.body;
+        if (!message || !String(message).trim()) {
+            return res.status(400).json({ success: false, message: "Message is required." });
         }
+        const trimmed = String(message).trim().slice(0, 5000);
 
         const { data, error } = await supabase
             .from("support_messages")
-            .insert([{ user_id, sender: "admin", message, is_read: true }])
-            .select()
-            .single();
+            .insert([{ user_id: userId, sender: "user", message: trimmed }])
+            .select().single();
+        if (error) return serverError(res, error, "support/messages post");
+        res.json({ success: true, message: data });
+    } catch (err) {
+        return serverError(res, err, "support/messages");
+    }
+});
 
-        if (error) return res.status(500).json({ success: false, message: error.message });
+/* ==========================================================
+   PLATFORM SETTINGS
+========================================================== */
+app.get("/settings/btc-address", async (req, res) => {
+    const { data, error } = await supabase
+        .from("platform_settings").select("btc_deposit_address").limit(1).maybeSingle();
+    if (error) return serverError(res, error, "settings/btc-address");
+    res.json({ success: true, btc_deposit_address: data?.btc_deposit_address || "" });
+});
 
+app.put("/admin/settings/btc-address", adminRequired, async (req, res) => {
+    try {
+        const { btc_deposit_address } = req.body;
+        if (!btc_deposit_address || !String(btc_deposit_address).trim()) {
+            return res.status(400).json({ success: false, message: "BTC deposit address is required." });
+        }
+        const address = String(btc_deposit_address).trim().slice(0, 200);
+
+        const { data: existing, error: findError } = await supabase
+            .from("platform_settings").select("id").limit(1).maybeSingle();
+        if (findError || !existing) return res.status(404).json({ success: false, message: "Platform settings not found." });
+
+        const { data, error } = await supabase
+            .from("platform_settings")
+            .update({ btc_deposit_address: address, updated_at: new Date().toISOString() })
+            .eq("id", existing.id).select().single();
+        if (error) return serverError(res, error, "admin/settings/btc-address");
+        res.json({ success: true, message: "BTC deposit address updated.", settings: data });
+    } catch (err) {
+        return serverError(res, err, "admin/settings/btc-address");
+    }
+});
+
+/* ==========================================================
+   ADMIN — SUPPORT CHAT
+========================================================== */
+app.get("/admin/support/users", adminRequired, async (req, res) => {
+    const { data, error } = await supabase
+        .from("support_messages").select("user_id")
+        .order("created_at", { ascending: false }).limit(500);
+    if (error) return serverError(res, error, "admin/support/users");
+    res.json({ success: true, users: [...new Set((data || []).map(m => m.user_id))] });
+});
+
+app.get("/admin/support/messages/:userId", adminRequired, async (req, res) => {
+    const { data, error } = await supabase
+        .from("support_messages").select("*")
+        .eq("user_id", req.params.userId)
+        .order("created_at", { ascending: true });
+    if (error) return serverError(res, error, "admin/support/messages");
+    res.json({ success: true, messages: data });
+});
+
+app.get("/admin/support/unread", adminRequired, async (req, res) => {
+    const { count, error } = await supabase
+        .from("support_messages").select("*", { count: "exact", head: true })
+        .eq("sender", "user").eq("is_read", false);
+    if (error) return serverError(res, error, "admin/support/unread");
+    res.json({ success: true, unread: count || 0 });
+});
+
+app.put("/admin/support/messages/:userId/read", adminRequired, async (req, res) => {
+    const { error } = await supabase
+        .from("support_messages").update({ is_read: true })
+        .eq("user_id", req.params.userId).eq("sender", "user").eq("is_read", false);
+    if (error) return serverError(res, error, "admin/support/read");
+    res.json({ success: true, message: "Messages marked as read." });
+});
+
+app.post("/admin/support/messages", adminRequired, async (req, res) => {
+    try {
+        const { user_id, message } = req.body;
+        if (!user_id || !message || !String(message).trim()) {
+            return res.status(400).json({ success: false, message: "User ID and message are required." });
+        }
+        const trimmed = String(message).trim().slice(0, 5000);
+
+        const { data, error } = await supabase
+            .from("support_messages")
+            .insert([{ user_id, sender: "admin", message: trimmed, is_read: true }])
+            .select().single();
+        if (error) return serverError(res, error, "admin/support/messages");
+
+        // Non-blocking email notification
         try {
             const { data: user } = await supabase
-                .from("users")
-                .select("email, full_name")
-                .eq("id", user_id)
-                .single();
-
-            if (user && user.email) {
+                .from("users").select("email, full_name").eq("id", user_id).maybeSingle();
+            if (user?.email) {
+                const safeFirst = escapeHtml((user.full_name || "there").split(" ")[0]);
+                const safeMessage = escapeHtml(trimmed);
                 await resend.emails.send({
                     from: "My Investment Support <support@myinvestments.cfd>",
                     to: user.email,
@@ -1192,10 +1333,10 @@ app.post("/admin/support/messages", async (req, res) => {
                     html: `
                         <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;background:#f9fafb;">
                             <div style="background:#fff;border-radius:12px;padding:32px;">
-                                <h2 style="color:#08090d;margin:0 0 8px;">Hi ${(user.full_name || "there").split(" ")[0]},</h2>
+                                <h2 style="color:#08090d;margin:0 0 8px;">Hi ${safeFirst},</h2>
                                 <p style="color:#5b6473;">You have a new message from My Investment Support:</p>
                                 <div style="background:#f3f4f6;border-left:3px solid #ff3b5c;padding:16px;border-radius:8px;">
-                                    <p style="color:#08090d;margin:0;white-space:pre-wrap;">${message}</p>
+                                    <p style="color:#08090d;margin:0;white-space:pre-wrap;">${safeMessage}</p>
                                 </div>
                                 <p style="color:#5b6473;margin-top:24px;">Please log in to your dashboard to reply.</p>
                             </div>
@@ -1209,30 +1350,48 @@ app.post("/admin/support/messages", async (req, res) => {
 
         res.json({ success: true, message: data });
     } catch (error) {
-        console.error("ADMIN SUPPORT ERROR:", error);
-        res.status(500).json({ success: false, message: "Unable to send support message." });
+        return serverError(res, error, "admin/support/messages");
     }
 });
 
-app.get("/chat/notification/:userId", async (req, res) => {
+app.get("/chat/notification/:userId", selfOrAdmin("userId"), async (req, res) => {
     try {
         const { data, error } = await supabase
-            .from("support_messages")
-            .select("sender, created_at")
+            .from("support_messages").select("sender, created_at")
             .eq("user_id", req.params.userId)
-            .order("created_at", { ascending: false })
-            .limit(1);
-
-        if (error) return res.status(500).json({ success: false, message: error.message });
+            .order("created_at", { ascending: false }).limit(1);
+        if (error) return serverError(res, error, "chat/notification");
         if (!data || data.length === 0) return res.json({ success: true, unread: false });
         res.json({ success: true, unread: data[0].sender === "admin" });
     } catch (error) {
-        console.error("CHAT NOTIFICATION ERROR:", error);
-        res.status(500).json({ success: false, message: "Unable to check chat notification." });
+        return serverError(res, error, "chat/notification");
     }
 });
 
-/* ---------------- START SERVER ---------------- */
+/* ==========================================================
+   GLOBAL ERROR HANDLER
+========================================================== */
+app.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+        if (err.code === "LIMIT_FILE_SIZE") {
+            return res.status(400).json({ success: false, message: "File too large. Max 5 MB." });
+        }
+        return res.status(400).json({ success: false, message: err.message });
+    }
+    console.error("❌ Unhandled error:", err);
+    res.status(500).json({ success: false, message: "Internal server error." });
+});
+
+process.on("unhandledRejection", (reason) => {
+    console.error("❌ Unhandled rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+    console.error("❌ Uncaught exception:", err);
+});
+
+/* ==========================================================
+   START
+========================================================== */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);
     await checkDB();

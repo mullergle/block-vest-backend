@@ -803,8 +803,9 @@ app.put("/change-password/:id", async (req, res) => {
     res.json({ success: true, message: "Password updated successfully" });
 });
 
-/* ---------------- CREATE DEPOSIT (DYNAMIC METHOD) ---------------- */
+/* ---------------- CREATE DEPOSIT (UPDATED FOR DYNAMIC METHOD) ---------------- */
 app.post("/deposit", upload.single("receipt"), async (req, res) => {
+    // 1. Extract payment_method from the frontend
     const { user_id, amount, payment_method } = req.body;
 
     if (!req.file) return res.status(400).json({ success: false, message: "Receipt is required." });
@@ -831,6 +832,7 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
 
     const cleanAmount = numericAmount;
     
+    // 2. Use the actual payment method provided
     const description = `${payment_method || 'Crypto'} Deposit`;
 
     const { data: txnData, error: transactionError } = await supabase
@@ -850,6 +852,8 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
 
     const transactionId = txnData && txnData[0] ? txnData[0].id : null;
 
+    // 3. Save the payment_method to the deposits table
+    // (Make sure you add a `payment_method` column in Supabase first!)
     const { data, error } = await supabase
         .from("deposits")
         .insert([{
@@ -1071,26 +1075,24 @@ app.post("/support/messages", async (req, res) => {
     res.json({ success: true, message: data });
 });
 
-/* ---------------- DYNAMIC DEPOSIT ADDRESSES ---------------- */
-app.get("/settings/deposit-addresses", async (req, res) => {
+/* ---------------- BTC ADDRESS ---------------- */
+app.get("/settings/btc-address", async (req, res) => {
     const { data, error } = await supabase
         .from("platform_settings")
-        .select("*")
+        .select("btc_deposit_address")
         .limit(1)
         .single();
 
     if (error) return res.status(500).json({ success: false, message: error.message });
-    res.json({ success: true, addresses: data });
+    res.json({ success: true, btc_deposit_address: data.btc_deposit_address || "" });
 });
 
-app.put("/admin/settings/deposit-addresses", async (req, res) => {
-    const { 
-        btc_deposit_address, 
-        eth_deposit_address, 
-        usdt_deposit_address, 
-        trx_deposit_address, 
-        sol_deposit_address 
-    } = req.body;
+app.put("/admin/settings/btc-address", async (req, res) => {
+    const { btc_deposit_address } = req.body;
+
+    if (!btc_deposit_address || !btc_deposit_address.trim()) {
+        return res.status(400).json({ success: false, message: "BTC deposit address is required." });
+    }
 
     const { data: existing, error: findError } = await supabase
         .from("platform_settings")
@@ -1103,11 +1105,7 @@ app.put("/admin/settings/deposit-addresses", async (req, res) => {
     const { data, error } = await supabase
         .from("platform_settings")
         .update({
-            btc_deposit_address: btc_deposit_address?.trim(),
-            eth_deposit_address: eth_deposit_address?.trim(),
-            usdt_deposit_address: usdt_deposit_address?.trim(),
-            trx_deposit_address: trx_deposit_address?.trim(),
-            sol_deposit_address: sol_deposit_address?.trim(),
+            btc_deposit_address: btc_deposit_address.trim(),
             updated_at: new Date().toISOString()
         })
         .eq("id", existing.id)
@@ -1115,7 +1113,7 @@ app.put("/admin/settings/deposit-addresses", async (req, res) => {
         .single();
 
     if (error) return res.status(500).json({ success: false, message: error.message });
-    res.json({ success: true, message: "Deposit addresses updated.", settings: data });
+    res.json({ success: true, message: "BTC deposit address updated.", settings: data });
 });
 
 /* ---------------- ADMIN CHAT ---------------- */

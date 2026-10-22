@@ -37,6 +37,59 @@ function cleanNumber(v) {
     return isNaN(n) ? v : n;
 }
 
+/* ---------------- WELCOME EMAIL HELPER ---------------- */
+async function sendWelcomeEmail({ to, fullName }) {
+    const firstName = (fullName || "there").trim().split(" ")[0];
+
+    const html = `
+    <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:32px 16px;">
+        <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+            <div style="background:#08090d;padding:28px 32px;">
+                <h1 style="color:#ffffff;font-size:20px;margin:0;">My Investment</h1>
+            </div>
+            <div style="padding:32px;">
+                <h2 style="color:#08090d;font-size:22px;margin:0 0 16px;">Welcome, ${firstName}!</h2>
+                <p style="color:#5b6473;font-size:15px;line-height:1.6;margin:0 0 16px;">
+                    Thank you for joining <strong>My Investment</strong>. Your email address has been successfully verified, and your account is now fully activated.
+                </p>
+                <p style="color:#5b6473;font-size:15px;line-height:1.6;margin:0 0 16px;">
+                    You can now access your dashboard to manage deposits, track withdrawals, monitor your portfolio, and communicate securely with our support team.
+                </p>
+                <div style="text-align:center;margin:28px 0;">
+                    <a href="https://myinvestments.cfd" style="background:#ff3b5c;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;display:inline-block;">
+                        Go to Dashboard
+                    </a>
+                </div>
+                <p style="color:#5b6473;font-size:15px;line-height:1.6;margin:0 0 8px;">
+                    If you have any questions, our support team is here to assist you at any time.
+                </p>
+                <p style="color:#5b6473;font-size:15px;line-height:1.6;margin:0;">
+                    Welcome aboard,<br/>
+                    <strong>The My Investment Team</strong>
+                </p>
+            </div>
+            <div style="background:#f3f4f6;padding:16px 32px;text-align:center;">
+                <p style="color:#9ca3af;font-size:12px;margin:0;">
+                    This is an automated message. Please do not reply directly to this email.
+                </p>
+            </div>
+        </div>
+    </div>`;
+
+    try {
+        const { error } = await resend.emails.send({
+            from: "My Investment <noreply@myinvestments.cfd>",
+            to,
+            subject: "Welcome to My Investment — Your Account Is Verified",
+            html
+        });
+
+        if (error) console.error("❌ Welcome email failed:", error);
+    } catch (err) {
+        console.error("❌ Welcome email exception:", err);
+    }
+}
+
 /* ---------------- HOME ---------------- */
 app.get("/", (req, res) => {
     res.json({ success: true, message: "🚀 Backend is running" });
@@ -156,6 +209,18 @@ app.post("/signup/verify", async (req, res) => {
         return res.status(500).json({ success: false, message: "Failed to verify user." });
     }
 
+    // ✉️ Send welcome notification (non-blocking)
+    const { data: verifiedUser } = await supabase
+        .from("users")
+        .select("full_name")
+        .eq("email", email)
+        .single();
+
+    await sendWelcomeEmail({
+        to: email,
+        fullName: verifiedUser?.full_name
+    });
+
     // 💥 SMART TOKEN GENERATION
     // We generate a secure, random token and save it to the database.
     // The frontend will use this token on the next page instead of the email!
@@ -203,6 +268,9 @@ app.post("/signup", async (req, res) => {
     if (error) {
         return res.status(500).json({ success: false, message: error.message });
     }
+
+    // ✉️ Send welcome notification (account is auto-verified)
+    await sendWelcomeEmail({ to: email, fullName });
 
     res.json({ success: true, message: "Account created.", user: data });
 });

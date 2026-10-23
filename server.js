@@ -1105,7 +1105,6 @@ app.put("/admin/settings/deposit-addresses", async (req, res) => {
 
     const updatePayload = { updated_at: new Date().toISOString() };
 
-    // Only update fields that were actually provided in the body
     if (btc_deposit_address !== undefined) updatePayload.btc_deposit_address = btc_deposit_address;
     if (eth_deposit_address !== undefined) updatePayload.eth_deposit_address = eth_deposit_address;
     if (usdt_deposit_address !== undefined) updatePayload.usdt_deposit_address = usdt_deposit_address;
@@ -1121,6 +1120,85 @@ app.put("/admin/settings/deposit-addresses", async (req, res) => {
 
     if (error) return res.status(500).json({ success: false, message: error.message });
     res.json({ success: true, message: "Deposit addresses updated successfully.", addresses: data });
+});
+
+/* ==========================================================
+   ★ ADMIN KYC VERIFICATION
+   ========================================================== */
+
+// GET: List all KYC requests with user info
+app.get("/admin/kyc", async (req, res) => {
+    const { data, error } = await supabase
+        .from("kyc_requests")
+        .select("*")
+        .order("created_at", { ascending: false });
+
+    if (error) return res.status(500).json({ success: false, message: error.message });
+
+    // Enrich each request with user data
+    const enriched = [];
+    for (const k of (data || [])) {
+        const { data: user } = await supabase
+            .from("users")
+            .select("full_name, email")
+            .eq("id", k.user_id)
+            .single();
+
+        enriched.push({
+            ...k,
+            full_name: user?.full_name || "Unknown",
+            email: user?.email || "N/A"
+        });
+    }
+
+    res.json({ success: true, requests: enriched });
+});
+
+// PUT: Approve KYC request
+app.put("/admin/kyc/:id/approve", async (req, res) => {
+    const { data: kyc, error } = await supabase
+        .from("kyc_requests")
+        .select("*")
+        .eq("id", req.params.id)
+        .single();
+
+    if (error || !kyc) return res.status(404).json({ success: false, message: "KYC request not found." });
+    if (kyc.status === "Approved") return res.status(400).json({ success: false, message: "Already approved." });
+
+    // Update the KYC request status
+    const { error: updateKycError } = await supabase
+        .from("kyc_requests")
+        .update({ status: "Approved" })
+        .eq("id", req.params.id);
+
+    if (updateKycError) return res.status(500).json({ success: false, message: updateKycError.message });
+
+    // Mark the user as verified
+    await supabase
+        .from("users")
+        .update({ is_verified: true })
+        .eq("id", kyc.user_id);
+
+    res.json({ success: true, message: "KYC approved successfully." });
+});
+
+// PUT: Reject KYC request
+app.put("/admin/kyc/:id/reject", async (req, res) => {
+    const { data: kyc, error } = await supabase
+        .from("kyc_requests")
+        .select("*")
+        .eq("id", req.params.id)
+        .single();
+
+    if (error || !kyc) return res.status(404).json({ success: false, message: "KYC request not found." });
+    if (kyc.status === "Rejected") return res.status(400).json({ success: false, message: "Already rejected." });
+
+    await supabase
+        .from("kyc_requests")
+        .update({ status: "Rejected" })
+        .eq("id", req.params.id);
+
+    res.json({ success: true, message: "KYC rejected." });
 });
 
 /* ---------------- ADMIN CHAT ---------------- */

@@ -126,6 +126,7 @@ app.post("/signup/send-code", async (req, res) => {
         return res.json({ success: false, message: "Email already exists." });
     }
 
+    // Create user with is_verified = false and email_verified = false
     const { error: dbError } = await supabase
         .from("users")
         .insert([{ 
@@ -134,7 +135,8 @@ app.post("/signup/send-code", async (req, res) => {
             country, 
             email, 
             password,
-            is_verified: false 
+            is_verified: false,
+            email_verified: false
         }]);
 
     if (dbError) {
@@ -176,7 +178,7 @@ app.post("/signup/send-code", async (req, res) => {
     }
 });
 
-/* ---------------- SIGNUP: VERIFY (SMART TOKEN GENERATION) ---------------- */
+/* ---------------- SIGNUP: VERIFY (EMAIL VERIFICATION ONLY) ---------------- */
 app.post("/signup/verify", async (req, res) => {
     const { email, code } = req.body;
 
@@ -199,14 +201,14 @@ app.post("/signup/verify", async (req, res) => {
         return res.status(401).json({ success: false, message: "Invalid verification code." });
     }
 
-    // Mark user as verified
+    // ✅ Mark ONLY email_verified as true. is_verified stays false until KYC approval.
     const { error: updateError } = await supabase
         .from("users")
-        .update({ is_verified: true })
+        .update({ email_verified: true })
         .eq("email", email);
 
     if (updateError) {
-        return res.status(500).json({ success: false, message: "Failed to verify user." });
+        return res.status(500).json({ success: false, message: "Failed to verify email." });
     }
 
     // ✉️ Send welcome notification (non-blocking)
@@ -223,7 +225,7 @@ app.post("/signup/verify", async (req, res) => {
 
     // 💥 SMART TOKEN GENERATION
     const resetToken = crypto.randomBytes(32).toString('hex');
-    const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString(); // 15 mins
+    const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
     await supabase
         .from("password_resets")
@@ -258,22 +260,30 @@ app.post("/signup", async (req, res) => {
         return res.status(400).json({ success: false, message: "Email already exists." });
     }
 
+    // ✅ is_verified stays false — admin will approve KYC later
     const { data, error } = await supabase
         .from("users")
-        .insert([{ full_name: fullName, phone, country, email, password, is_verified: true }]) 
+        .insert([{ 
+            full_name: fullName, 
+            phone, 
+            country, 
+            email, 
+            password, 
+            is_verified: false,
+            email_verified: true
+        }]) 
         .select();
 
     if (error) {
         return res.status(500).json({ success: false, message: error.message });
     }
 
-    // ✉️ Send welcome notification (account is auto-verified)
     await sendWelcomeEmail({ to: email, fullName });
 
     res.json({ success: true, message: "Account created.", user: data });
 });
 
-/* ---------------- LOGIN ---------------- */
+/* ---------------- LOGIN (CHECKS email_verified NOT is_verified) ---------------- */
 app.post("/login", async (req, res) => {
     const { email, password } = req.body;
 
@@ -292,7 +302,8 @@ app.post("/login", async (req, res) => {
         return res.status(401).json({ success: false, message: "Invalid email or password." });
     }
 
-    if (data.is_verified === false) {
+    // ✅ Check email_verified instead of is_verified
+    if (data.email_verified === false) {
         return res.status(403).json({ success: false, message: "Please verify your email address before logging in." });
     }
 
@@ -423,7 +434,6 @@ app.post("/verify-code", async (req, res) => {
         return res.status(401).json({ success: false, message: "Invalid verification code." });
     }
 
-    // 💥 SMART TOKEN GENERATION
     const resetToken = crypto.randomBytes(32).toString('hex');
     const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
@@ -442,7 +452,7 @@ app.post("/verify-code", async (req, res) => {
     });
 });
 
-/* ---------------- RESET PASSWORD (SMART TOKEN CHECK) ---------------- */
+/* ---------------- RESET PASSWORD ---------------- */
 app.post("/reset-password", async (req, res) => {
     const { email, password, token } = req.body;
 
@@ -1071,7 +1081,6 @@ app.post("/support/messages", async (req, res) => {
    ★ DEPOSIT WALLET ADDRESSES (All Coins)
    ========================================================== */
 
-// GET: Fetch all deposit addresses (used by the deposit page)
 app.get("/settings/deposit-addresses", async (req, res) => {
     const { data, error } = await supabase
         .from("platform_settings")
@@ -1083,7 +1092,6 @@ app.get("/settings/deposit-addresses", async (req, res) => {
     res.json({ success: true, addresses: data });
 });
 
-// PUT: Admin updates one or more wallet addresses
 app.put("/admin/settings/deposit-addresses", async (req, res) => {
     const {
         btc_deposit_address,
@@ -1126,7 +1134,6 @@ app.put("/admin/settings/deposit-addresses", async (req, res) => {
    ★ ADMIN KYC VERIFICATION
    ========================================================== */
 
-// GET: List all KYC requests with user info
 app.get("/admin/kyc", async (req, res) => {
     const { data, error } = await supabase
         .from("kyc_requests")
@@ -1135,7 +1142,6 @@ app.get("/admin/kyc", async (req, res) => {
 
     if (error) return res.status(500).json({ success: false, message: error.message });
 
-    // Enrich each request with user data
     const enriched = [];
     for (const k of (data || [])) {
         const { data: user } = await supabase
@@ -1154,7 +1160,6 @@ app.get("/admin/kyc", async (req, res) => {
     res.json({ success: true, requests: enriched });
 });
 
-// PUT: Approve KYC request
 app.put("/admin/kyc/:id/approve", async (req, res) => {
     const { data: kyc, error } = await supabase
         .from("kyc_requests")
@@ -1165,7 +1170,6 @@ app.put("/admin/kyc/:id/approve", async (req, res) => {
     if (error || !kyc) return res.status(404).json({ success: false, message: "KYC request not found." });
     if (kyc.status === "Approved") return res.status(400).json({ success: false, message: "Already approved." });
 
-    // Update the KYC request status
     const { error: updateKycError } = await supabase
         .from("kyc_requests")
         .update({ status: "Approved" })
@@ -1173,7 +1177,7 @@ app.put("/admin/kyc/:id/approve", async (req, res) => {
 
     if (updateKycError) return res.status(500).json({ success: false, message: updateKycError.message });
 
-    // Mark the user as verified
+    // ✅ NOW this is the only place is_verified becomes true
     await supabase
         .from("users")
         .update({ is_verified: true })
@@ -1182,7 +1186,6 @@ app.put("/admin/kyc/:id/approve", async (req, res) => {
     res.json({ success: true, message: "KYC approved successfully." });
 });
 
-// PUT: Reject KYC request
 app.put("/admin/kyc/:id/reject", async (req, res) => {
     const { data: kyc, error } = await supabase
         .from("kyc_requests")
@@ -1197,6 +1200,12 @@ app.put("/admin/kyc/:id/reject", async (req, res) => {
         .from("kyc_requests")
         .update({ status: "Rejected" })
         .eq("id", req.params.id);
+
+    // Ensure is_verified stays false on rejection
+    await supabase
+        .from("users")
+        .update({ is_verified: false })
+        .eq("id", kyc.user_id);
 
     res.json({ success: true, message: "KYC rejected." });
 });

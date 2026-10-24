@@ -375,7 +375,7 @@ app.post("/login", async (req, res) => {
     });
 });
 
-/* ---------------- GET USER (FIXED REFERRAL CODE) ---------------- */
+/* ---------------- GET USER ---------------- */
 app.get("/user/:id", async (req, res) => {
     const { data, error } = await supabase
         .from("users")
@@ -390,12 +390,10 @@ app.get("/user/:id", async (req, res) => {
     // ✅ GENERATE A CLEAN REFERRAL CODE IF MISSING
     let refCode = data.referral_code;
     if (!refCode) {
-        // Take only the first 8 characters of the UUID (e.g., "db86e987") and uppercase it
         refCode = String(data.id).split('-')[0].toUpperCase();
         await supabase.from("users").update({ referral_code: refCode }).eq("id", data.id);
     }
 
-    // Count how many users were referred by this code
     const { count: referralCount } = await supabase
         .from("users")
         .select("*", { count: "exact", head: true })
@@ -596,10 +594,30 @@ app.post("/reset-password", async (req, res) => {
 
 /* ---------------- WITHDRAW ---------------- */
 app.post("/withdraw/send-code", async (req, res) => {
-    const { email } = req.body;
+    const { email, user_id } = req.body;
 
     if (!email) {
         return res.status(400).json({ success: false, message: "Email is required." });
+    }
+
+    // ✅ KYC Check: Block unverified users from requesting a withdrawal code
+    if (user_id) {
+        const { data: user } = await supabase
+            .from("users")
+            .select("is_verified, full_name")
+            .eq("id", user_id)
+            .single();
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found." });
+        }
+
+        if (user.is_verified === false) {
+            return res.status(403).json({ 
+                success: false, 
+                message: "Please complete your KYC verification before requesting a withdrawal." 
+            });
+        }
     }
 
     const code = crypto.randomInt(100000, 999999).toString();
@@ -648,17 +666,25 @@ app.post("/withdraw/create", async (req, res) => {
         return res.status(400).json({ success: false, message: "Invalid withdrawal amount." });
     }
 
-    const { data: balanceCheck, error: balErr } = await supabase
+    // ✅ KYC Check: Block unverified users from creating withdrawals
+    const { data: userCheck, error: userCheckErr } = await supabase
         .from("users")
-        .select("balance")
+        .select("is_verified, balance")
         .eq("id", user_id)
         .single();
 
-    if (balErr || !balanceCheck) {
+    if (userCheckErr || !userCheck) {
         return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    const userBalance = Number(balanceCheck.balance || 0);
+    if (userCheck.is_verified === false) {
+        return res.status(403).json({ 
+            success: false, 
+            message: "Please complete your KYC verification before requesting a withdrawal." 
+        });
+    }
+
+    const userBalance = Number(userCheck.balance || 0);
     if (numericAmount > userBalance) {
         return res.status(400).json({
             success: false,
@@ -788,13 +814,14 @@ app.get("/admin/user/:id", async (req, res) => {
     });
 });
 
+/* ---------------- ADMIN UPDATE USER (FIXED: Now saves full_name & phone) ---------------- */
 app.put("/admin/user/:id", async (req, res) => {
     const userId = req.params.id;
-    const { balance, total_trade, assets, active_assets, btc_balance, eth_balance, usdt_balance, is_suspended } = req.body;
+    const { full_name, phone, balance, total_trade, assets, active_assets, btc_balance, eth_balance, usdt_balance, is_suspended } = req.body;
 
     const { data: existingUser, error: fetchError } = await supabase
         .from("users")
-        .select("balance")
+        .select("balance, full_name, phone")
         .eq("id", userId)
         .single();
 
@@ -803,21 +830,32 @@ app.put("/admin/user/:id", async (req, res) => {
     }
 
     const oldBalance = Number(existingUser.balance || 0);
-    const newBalance = cleanNumber(balance);
+    const newBalance = balance !== undefined ? cleanNumber(balance) : oldBalance;
     const difference = Number(newBalance || 0) - oldBalance;
+
+    // ✅ FIX: Include full_name and phone in the update payload
+    const updatePayload = {
+        balance: newBalance,
+        total_trade: cleanNumber(total_trade),
+        assets: cleanNumber(assets),
+        active_assets: cleanNumber(active_assets),
+        btc_balance: cleanNumber(btc_balance),
+        eth_balance: cleanNumber(eth_balance),
+        usdt_balance: cleanNumber(usdt_balance),
+        is_suspended
+    };
+
+    // Only update full_name and phone if they were actually provided
+    if (full_name !== undefined && full_name !== null && String(full_name).trim() !== "") {
+        updatePayload.full_name = String(full_name).trim();
+    }
+    if (phone !== undefined && phone !== null) {
+        updatePayload.phone = String(phone).trim();
+    }
 
     const { data, error } = await supabase
         .from("users")
-        .update({
-            balance: newBalance,
-            total_trade: cleanNumber(total_trade),
-            assets: cleanNumber(assets),
-            active_assets: cleanNumber(active_assets),
-            btc_balance: cleanNumber(btc_balance),
-            eth_balance: cleanNumber(eth_balance),
-            usdt_balance: cleanNumber(usdt_balance),
-            is_suspended
-        })
+        .update(updatePayload)
         .eq("id", userId)
         .select();
 

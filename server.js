@@ -374,8 +374,7 @@ app.post("/login", async (req, res) => {
     });
 });
 
-/* ---------------- GET USER ---------------- */
-/* ---------------- GET USER ---------------- */
+/* ---------------- GET USER (UPDATED) ---------------- */
 app.get("/user/:id", async (req, res) => {
     const { data, error } = await supabase
         .from("users")
@@ -387,7 +386,7 @@ app.get("/user/:id", async (req, res) => {
         return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    // ✅ NEW: Fetch all transactions to calculate real totals
+    // ✅ Fetch all transactions to calculate real totals
     const { data: txns } = await supabase
         .from("transactions")
         .select("type, amount, status")
@@ -398,7 +397,6 @@ app.get("/user/:id", async (req, res) => {
 
     if (txns) {
         txns.forEach(t => {
-            // Only count Approved transactions for the totals
             if (t.status === 'Approved') {
                 if (t.type === 'Deposit') totalDeposit += Number(t.amount || 0);
                 if (t.type === 'Withdrawal') totalWithdrawal += Number(t.amount || 0);
@@ -412,9 +410,9 @@ app.get("/user/:id", async (req, res) => {
             ...data,
             balance_display: formatMoney(data.balance),
             total_trade_display: formatMoney(data.total_trade),
-            // ✅ OVERRIDE: Send the calculated totals
-            assets_display: formatMoney(totalDeposit),
-            active_assets_display: formatMoney(totalWithdrawal),
+            // ✅ NEW KEYS matching the frontend
+            total_deposit_display: formatMoney(totalDeposit),
+            total_withdrawal_display: formatMoney(totalWithdrawal),
             btc_balance_display: formatMoney(data.btc_balance),
             eth_balance_display: formatMoney(data.eth_balance),
             usdt_balance_display: formatMoney(data.usdt_balance)
@@ -481,7 +479,7 @@ app.post("/forgot-password", async (req, res) => {
     }
 });
 
-/* ---------------- VERIFY CODE (FIXED) ---------------- */
+/* ---------------- VERIFY CODE ---------------- */
 app.post("/verify-code", async (req, res) => {
     let { email, code } = req.body;
 
@@ -510,16 +508,13 @@ app.post("/verify-code", async (req, res) => {
         return res.status(401).json({ success: false, message: "Invalid verification code." });
     }
 
-    // Generate token
     const resetToken = crypto.randomBytes(32).toString('hex');
     
-    // ✅ SAVE TO MEMORY (Bypasses Supabase update bug entirely)
     inMemoryTokens[email] = {
         token: resetToken,
-        expires: Date.now() + 15 * 60 * 1000 // 15 minutes
+        expires: Date.now() + 15 * 60 * 1000
     };
 
-    // Try to update DB just in case, but don't rely on it
     await supabase
         .from("password_resets")
         .update({ 
@@ -535,7 +530,7 @@ app.post("/verify-code", async (req, res) => {
     });
 });
 
-/* ---------------- RESET PASSWORD (FIXED) ---------------- */
+/* ---------------- RESET PASSWORD ---------------- */
 app.post("/reset-password", async (req, res) => {
     let { email, password, token } = req.body;
 
@@ -546,7 +541,6 @@ app.post("/reset-password", async (req, res) => {
     email = email.trim().toLowerCase();
 
     try {
-        // ✅ CHECK MEMORY INSTEAD OF DATABASE
         const session = inMemoryTokens[email];
 
         if (!session) {
@@ -564,7 +558,6 @@ app.post("/reset-password", async (req, res) => {
             return res.status(403).json({ success: false, message: "Session expired. Please request a new code." });
         }
 
-        // Update the password
         const { error: updateError } = await supabase
             .from("users")
             .update({ password: password })
@@ -574,9 +567,7 @@ app.post("/reset-password", async (req, res) => {
             return res.status(500).json({ success: false, message: updateError.message });
         }
 
-        // Clean up memory
         delete inMemoryTokens[email];
-        // Try to clean up DB
         await supabase.from("password_resets").delete().eq("email", email);
 
         res.json({ success: true, message: "Password reset successfully." });
@@ -1641,7 +1632,6 @@ app.post("/trade", async (req, res) => {
     }
 
     try {
-        // 1. Check user balance
         const { data: user, error: userErr } = await supabase
             .from("users")
             .select("balance")
@@ -1660,26 +1650,23 @@ app.post("/trade", async (req, res) => {
             });
         }
 
-        // 2. Deduct balance
         const newBalance = currentBalance - numericAmount;
         await supabase.from("users").update({ balance: newBalance }).eq("id", user_id);
 
-        // 3. Log the trade in transactions table
         const description = `${action} ${pair} (${lot_size} lots)${stop_loss ? ` | SL: ${stop_loss}` : ''}`;
         
         const { data: txnData, error: txnError } = await supabase
             .from("transactions")
             .insert([{
                 user_id,
-                type: trade_type, // "Crypto" or "Forex"
+                type: trade_type,
                 amount: numericAmount,
-                status: "Approved", // Trades are executed instantly
+                status: "Approved",
                 description: description
             }])
             .select();
 
         if (txnError) {
-            // Rollback balance if transaction fails
             await supabase.from("users").update({ balance: currentBalance }).eq("id", user_id);
             console.error("Trade log error:", txnError);
             return res.status(500).json({ success: false, message: "Failed to log trade." });

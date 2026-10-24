@@ -375,6 +375,7 @@ app.post("/login", async (req, res) => {
 });
 
 /* ---------------- GET USER ---------------- */
+/* ---------------- GET USER ---------------- */
 app.get("/user/:id", async (req, res) => {
     const { data, error } = await supabase
         .from("users")
@@ -386,14 +387,34 @@ app.get("/user/:id", async (req, res) => {
         return res.status(404).json({ success: false, message: "User not found." });
     }
 
+    // ✅ NEW: Fetch all transactions to calculate real totals
+    const { data: txns } = await supabase
+        .from("transactions")
+        .select("type, amount, status")
+        .eq("user_id", req.params.id);
+
+    let totalDeposit = 0;
+    let totalWithdrawal = 0;
+
+    if (txns) {
+        txns.forEach(t => {
+            // Only count Approved transactions for the totals
+            if (t.status === 'Approved') {
+                if (t.type === 'Deposit') totalDeposit += Number(t.amount || 0);
+                if (t.type === 'Withdrawal') totalWithdrawal += Number(t.amount || 0);
+            }
+        });
+    }
+
     res.json({
         success: true,
         user: {
             ...data,
             balance_display: formatMoney(data.balance),
             total_trade_display: formatMoney(data.total_trade),
-            assets_display: formatMoney(data.assets),
-            active_assets_display: formatMoney(data.active_assets),
+            // ✅ OVERRIDE: Send the calculated totals
+            assets_display: formatMoney(totalDeposit),
+            active_assets_display: formatMoney(totalWithdrawal),
             btc_balance_display: formatMoney(data.btc_balance),
             eth_balance_display: formatMoney(data.eth_balance),
             usdt_balance_display: formatMoney(data.usdt_balance)

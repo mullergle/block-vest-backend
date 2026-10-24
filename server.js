@@ -375,7 +375,7 @@ app.post("/login", async (req, res) => {
     });
 });
 
-/* ---------------- GET USER (UPDATED WITH REFERRAL) ---------------- */
+/* ---------------- GET USER (FIXED REFERRAL CODE) ---------------- */
 app.get("/user/:id", async (req, res) => {
     const { data, error } = await supabase
         .from("users")
@@ -387,14 +387,15 @@ app.get("/user/:id", async (req, res) => {
         return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    // ✅ GENERATE REFERRAL CODE IF MISSING
+    // ✅ GENERATE A CLEAN REFERRAL CODE IF MISSING
     let refCode = data.referral_code;
     if (!refCode) {
-        refCode = String(data.id) + Math.random().toString(36).substring(2, 6).toUpperCase();
+        // Take only the first 8 characters of the UUID (e.g., "db86e987") and uppercase it
+        refCode = String(data.id).split('-')[0].toUpperCase();
         await supabase.from("users").update({ referral_code: refCode }).eq("id", data.id);
     }
 
-    // Count how many users were referred by this user
+    // Count how many users were referred by this code
     const { count: referralCount } = await supabase
         .from("users")
         .select("*", { count: "exact", head: true })

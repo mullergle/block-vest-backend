@@ -814,7 +814,7 @@ app.get("/admin/user/:id", async (req, res) => {
     });
 });
 
-/* ---------------- ADMIN UPDATE USER (FIXED: Now saves full_name & phone) ---------------- */
+/* ---------------- ADMIN UPDATE USER ---------------- */
 app.put("/admin/user/:id", async (req, res) => {
     const userId = req.params.id;
     const { full_name, phone, balance, total_trade, assets, active_assets, btc_balance, eth_balance, usdt_balance, is_suspended } = req.body;
@@ -833,7 +833,6 @@ app.put("/admin/user/:id", async (req, res) => {
     const newBalance = balance !== undefined ? cleanNumber(balance) : oldBalance;
     const difference = Number(newBalance || 0) - oldBalance;
 
-    // ✅ FIX: Include full_name and phone in the update payload
     const updatePayload = {
         balance: newBalance,
         total_trade: cleanNumber(total_trade),
@@ -845,7 +844,6 @@ app.put("/admin/user/:id", async (req, res) => {
         is_suspended
     };
 
-    // Only update full_name and phone if they were actually provided
     if (full_name !== undefined && full_name !== null && String(full_name).trim() !== "") {
         updatePayload.full_name = String(full_name).trim();
     }
@@ -1587,6 +1585,29 @@ app.get("/admin/support/unread", async (req, res) => {
 
     if (error) return res.status(500).json({ success: false, message: error.message });
     res.json({ success: true, unread: count || 0 });
+});
+
+/* ---------------- ADMIN: PER-USER SUPPORT STATUS (NEW) ---------------- */
+app.get("/admin/support/user-status", async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from("support_messages")
+            .select("user_id, sender, is_read");
+        if (error) throw error;
+
+        const statusMap = {};
+        (data || []).forEach(m => {
+            const entry = statusMap[m.user_id] || { has_messages: false, unread: 0 };
+            entry.has_messages = true;
+            if (m.sender === "user" && m.is_read === false) entry.unread += 1;
+            statusMap[m.user_id] = entry;
+        });
+
+        res.json({ success: true, status: statusMap });
+    } catch (err) {
+        console.error("SUPPORT STATUS ERROR:", err);
+        res.status(500).json({ success: false, message: err.message });
+    }
 });
 
 app.put("/admin/support/messages/:userId/read", async (req, res) => {

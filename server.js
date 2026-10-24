@@ -14,13 +14,11 @@ const CODE_EXPIRY = 10 * 60 * 1000; // 10 minutes
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Updated multer to accept multiple fields for KYC
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
-// Middlewares
 app.use(cors());
 app.use(express.json());
 
@@ -41,8 +39,6 @@ function cleanNumber(v) {
 }
 
 /* ---------------- EMAIL TEMPLATES ---------------- */
-
-// 1. Welcome Email (Signup)
 async function sendWelcomeEmail({ to, fullName }) {
     const firstName = (fullName || "there").trim().split(" ")[0];
 
@@ -95,7 +91,6 @@ async function sendWelcomeEmail({ to, fullName }) {
     }
 }
 
-// 2. Generic Notification Email Template
 async function sendNotificationEmail({ to, fullName, title, message, amount = null, status = null, isError = false }) {
     const firstName = (fullName || "there").trim().split(" ")[0];
     const accentColor = isError ? "#f23645" : "#1ebba3";
@@ -165,7 +160,6 @@ async function checkDB() {
     else console.log("✅ Database connected successfully");
 }
 
-/* ---------------- TEST ---------------- */
 app.get("/test", async (req, res) => {
     const { data, error } = await supabase.from("users").select("*");
     if (error) return res.json({ success: false, error: error.message });
@@ -241,7 +235,7 @@ app.post("/signup/send-code", async (req, res) => {
     }
 });
 
-/* ---------------- SIGNUP: VERIFY (EMAIL VERIFICATION ONLY) ---------------- */
+/* ---------------- SIGNUP: VERIFY ---------------- */
 app.post("/signup/verify", async (req, res) => {
     const { email, code } = req.body;
 
@@ -546,7 +540,7 @@ app.post("/reset-password", async (req, res) => {
     res.json({ success: true, message: "Password reset successfully." });
 });
 
-/* ---------------- WITHDRAW: SEND CODE ---------------- */
+/* ---------------- WITHDRAW ---------------- */
 app.post("/withdraw/send-code", async (req, res) => {
     const { email } = req.body;
 
@@ -588,7 +582,6 @@ app.post("/withdraw/send-code", async (req, res) => {
     }
 });
 
-/* ---------------- CREATE WITHDRAWAL ---------------- */
 app.post("/withdraw/create", async (req, res) => {
     const { user_id, email, code, method, wallet_address, amount } = req.body;
 
@@ -683,7 +676,7 @@ app.post("/withdraw/create", async (req, res) => {
     });
 });
 
-/* ---------------- ADMIN STATS ---------------- */
+/* ---------------- ADMIN ---------------- */
 app.get("/admin/stats", async (req, res) => {
     const { count: totalUsers } = await supabase
         .from("users")
@@ -693,7 +686,6 @@ app.get("/admin/stats", async (req, res) => {
     res.json({ totalUsers: totalUsers || 0, totalBalance: 0, deposits: 0, withdrawals: 0 });
 });
 
-/* ---------------- ADMIN WITHDRAWALS ---------------- */
 app.get("/admin/withdrawals", async (req, res) => {
     const { data, error } = await supabase
         .from("withdrawals")
@@ -708,7 +700,6 @@ app.get("/admin/withdrawals", async (req, res) => {
     });
 });
 
-/* ---------------- ADMIN UNREAD WITHDRAWALS ---------------- */
 app.get("/admin/unread-withdrawals", async (req, res) => {
     const { count, error } = await supabase
         .from("withdrawals")
@@ -719,7 +710,6 @@ app.get("/admin/unread-withdrawals", async (req, res) => {
     res.json({ success: true, count: count || 0 });
 });
 
-/* ---------------- ADMIN GET SINGLE USER ---------------- */
 app.get("/admin/user/:id", async (req, res) => {
     const { data, error } = await supabase
         .from("users")
@@ -744,7 +734,6 @@ app.get("/admin/user/:id", async (req, res) => {
     });
 });
 
-/* ---------------- ADMIN UPDATE USER ---------------- */
 app.put("/admin/user/:id", async (req, res) => {
     const userId = req.params.id;
     const { balance, total_trade, assets, active_assets, btc_balance, eth_balance, usdt_balance, is_suspended } = req.body;
@@ -798,7 +787,6 @@ app.put("/admin/user/:id", async (req, res) => {
     res.json({ success: true, message: "User updated successfully", user: data });
 });
 
-/* ---------------- ADMIN UPDATE USER ASSETS ---------------- */
 app.put("/admin/user-assets/:id", async (req, res) => {
     const { btc_balance, eth_balance, usdt_balance } = req.body;
     const { data, error } = await supabase
@@ -815,7 +803,6 @@ app.put("/admin/user-assets/:id", async (req, res) => {
     res.json({ success: true, message: "Assets updated successfully", user: data });
 });
 
-/* ---------------- ADMIN GET ALL USERS ---------------- */
 app.get("/admin/users", async (req, res) => {
     const { data, error } = await supabase
         .from("users")
@@ -840,7 +827,6 @@ app.get("/admin/users", async (req, res) => {
     });
 });
 
-/* ---------------- CHANGE PASSWORD ---------------- */
 app.put("/change-password/:id", async (req, res) => {
     const { old_password, new_password } = req.body;
 
@@ -866,7 +852,7 @@ app.put("/change-password/:id", async (req, res) => {
     res.json({ success: true, message: "Password updated successfully" });
 });
 
-/* ---------------- CREATE DEPOSIT ---------------- */
+/* ---------------- DEPOSIT ---------------- */
 app.post("/deposit", upload.single("receipt"), async (req, res) => {
     const { user_id, amount, payment_method } = req.body;
 
@@ -929,7 +915,6 @@ app.post("/deposit", upload.single("receipt"), async (req, res) => {
     res.json({ success: true, message: "Deposit submitted successfully.", deposit: data });
 });
 
-/* ---------------- USER TRANSACTIONS ---------------- */
 app.get("/transactions/:userId", async (req, res) => {
     const { data, error } = await supabase
         .from("transactions")
@@ -945,7 +930,7 @@ app.get("/transactions/:userId", async (req, res) => {
     });
 });
 
-/* ---------------- ADMIN APPROVE WITHDRAWAL ---------------- */
+/* ---------------- ADMIN APPROVE/REJECT ---------------- */
 app.put("/admin/withdrawals/:id/approve", async (req, res) => {
     const { data: withdrawal, error } = await supabase
         .from("withdrawals")
@@ -971,7 +956,6 @@ app.put("/admin/withdrawals/:id/approve", async (req, res) => {
         await supabase.from("transactions").update({ status: "Approved" }).eq("id", withdrawal.transaction_id);
     }
 
-    // 📧 SEND NOTIFICATION EMAIL
     if (user && user.email) {
         await sendNotificationEmail({
             to: user.email,
@@ -987,9 +971,8 @@ app.put("/admin/withdrawals/:id/approve", async (req, res) => {
     res.json({ success: true, message: "Withdrawal approved." });
 });
 
-/* ---------------- ADMIN REJECT WITHDRAWAL ---------------- */
 app.put("/admin/withdrawals/:id/reject", async (req, res) => {
-    const { data       : withdrawal, error } = await supabase
+    const { data: withdrawal, error } = await supabase
         .from("withdrawals")
         .select("*")
         .eq("id", req.params.id)
@@ -1013,7 +996,6 @@ app.put("/admin/withdrawals/:id/reject", async (req, res) => {
         .eq("id", withdrawal.user_id)
         .single();
 
-    // 📧 SEND NOTIFICATION EMAIL
     if (user && user.email) {
         await sendNotificationEmail({
             to: user.email,
@@ -1029,7 +1011,6 @@ app.put("/admin/withdrawals/:id/reject", async (req, res) => {
     res.json({ success: true, message: "Withdrawal rejected." });
 });
 
-/* ---------------- ADMIN DELETE WITHDRAWAL ---------------- */
 app.delete("/admin/withdrawals/:id", async (req, res) => {
     const { data: withdrawal, error } = await supabase
         .from("withdrawals")
@@ -1045,7 +1026,6 @@ app.delete("/admin/withdrawals/:id", async (req, res) => {
     res.json({ success: true, message: "Withdrawal deleted successfully." });
 });
 
-/* ---------------- ADMIN DEPOSITS ---------------- */
 app.get("/admin/deposits", async (req, res) => {
     const { data: deposits, error } = await supabase
         .from("deposits")
@@ -1067,7 +1047,6 @@ app.get("/admin/deposits", async (req, res) => {
     res.json({ success: true, deposits });
 });
 
-/* ---------------- ADMIN APPROVE DEPOSIT ---------------- */
 app.put("/admin/deposits/:id/approve", async (req, res) => {
     const { data: deposit, error } = await supabase
         .from("deposits")
@@ -1094,7 +1073,6 @@ app.put("/admin/deposits/:id/approve", async (req, res) => {
         await supabase.from("transactions").update({ status: "Approved" }).eq("id", deposit.transaction_id);
     }
 
-    // 📧 SEND NOTIFICATION EMAIL
     if (user && user.email) {
         await sendNotificationEmail({
             to: user.email,
@@ -1110,7 +1088,6 @@ app.put("/admin/deposits/:id/approve", async (req, res) => {
     res.json({ success: true, message: "Deposit approved." });
 });
 
-/* ---------------- ADMIN REJECT DEPOSIT ---------------- */
 app.put("/admin/deposits/:id/reject", async (req, res) => {
     const { data: deposit, error } = await supabase
         .from("deposits")
@@ -1133,7 +1110,6 @@ app.put("/admin/deposits/:id/reject", async (req, res) => {
         .eq("id", deposit.user_id)
         .single();
 
-    // 📧 SEND NOTIFICATION EMAIL
     if (user && user.email) {
         await sendNotificationEmail({
             to: user.email,
@@ -1149,7 +1125,6 @@ app.put("/admin/deposits/:id/reject", async (req, res) => {
     res.json({ success: true, message: "Deposit rejected." });
 });
 
-/* ---------------- ADMIN NOTIFICATIONS ---------------- */
 app.get("/admin/notifications", async (req, res) => {
     const { count: deposits } = await supabase
         .from("deposits")
@@ -1197,7 +1172,7 @@ app.post("/support/messages", async (req, res) => {
     res.json({ success: true, message: data });
 });
 
-/* ---------------- DEPOSIT WALLET ADDRESSES ---------------- */
+/* ---------------- DEPOSIT ADDRESSES ---------------- */
 app.get("/settings/deposit-addresses", async (req, res) => {
     const { data, error } = await supabase
         .from("platform_settings")
@@ -1353,7 +1328,7 @@ app.get("/kyc/status/:userId", async (req, res) => {
     }
 });
 
-/* ---------------- ADMIN KYC VERIFICATION ---------------- */
+/* ---------------- ADMIN KYC ---------------- */
 app.get("/admin/kyc", async (req, res) => {
     const { data, error } = await supabase
         .from("kyc_requests")
@@ -1370,7 +1345,7 @@ app.get("/admin/kyc", async (req, res) => {
             .eq("id", k.user_id)
             .single();
 
- enriched.push({
+        enriched.push({
             ...k,
             full_name: user?.full_name || "Unknown",
             email: user?.email || "N/A"
@@ -1402,7 +1377,6 @@ app.put("/admin/kyc/:id/approve", async (req, res) => {
         .update({ is_verified: true })
         .eq("id", kyc.user_id);
 
-    // 📧 SEND NOTIFICATION EMAIL
     const { data: user } = await supabase
         .from("users")
         .select("full_name, email")
@@ -1447,7 +1421,6 @@ app.put("/admin/kyc/:id/reject", async (req, res) => {
         .update({ is_verified: false })
         .eq("id", kyc.user_id);
 
-    // 📧 SEND NOTIFICATION EMAIL
     const { data: user } = await supabase
         .from("users")
         .select("full_name, email")
@@ -1469,14 +1442,38 @@ app.put("/admin/kyc/:id/reject", async (req, res) => {
 });
 
 /* ---------------- ADMIN CHAT ---------------- */
+// UPDATED: Now fetches user details instead of just IDs
 app.get("/admin/support/users", async (req, res) => {
-    const { data, error } = await supabase
-        .from("support_messages")
-        .select("user_id")
-        .order("created_at", { ascending: false });
+    try {
+        const { data: messages, error } = await supabase
+            .from("support_messages")
+            .select("user_id")
+            .order("created_at", { ascending: false });
 
-    if (error) return res.status(500).json({ success: false, message: error.message });
-    res.json({ success: true, users: [...new Set(data.map(m => m.user_id))] });
+        if (error) throw error;
+
+        const uniqueUserIds = [...new Set(messages.map(m => m.user_id))];
+        const usersList = [];
+
+        for (const id of uniqueUserIds) {
+            const { data: user } = await supabase
+                .from("users")
+                .select("id, full_name, email")
+                .eq("id", id)
+                .single();
+            
+            if (user) {
+                usersList.push(user);
+            } else {
+                usersList.push({ id, full_name: "Unknown User", email: "N/A" });
+            }
+        }
+
+        res.json({ success: true, users: usersList });
+    } catch (error) {
+        console.error("FETCH SUPPORT USERS ERROR:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
 });
 
 app.get("/admin/support/messages/:userId", async (req, res) => {

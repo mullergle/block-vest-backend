@@ -40,7 +40,9 @@ function cleanNumber(v) {
     return isNaN(n) ? v : n;
 }
 
-/* ---------------- WELCOME EMAIL HELPER ---------------- */
+/* ---------------- EMAIL TEMPLATES ---------------- */
+
+// 1. Welcome Email (Signup)
 async function sendWelcomeEmail({ to, fullName }) {
     const firstName = (fullName || "there").trim().split(" ")[0];
 
@@ -93,6 +95,65 @@ async function sendWelcomeEmail({ to, fullName }) {
     }
 }
 
+// 2. Generic Notification Email Template
+async function sendNotificationEmail({ to, fullName, title, message, amount = null, status = null, isError = false }) {
+    const firstName = (fullName || "there").trim().split(" ")[0];
+    const accentColor = isError ? "#f23645" : "#1ebba3";
+
+    const html = `
+    <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:32px 16px;">
+        <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+            <div style="background:#08090d;padding:28px 32px;">
+                <h1 style="color:#ffffff;font-size:20px;margin:0;">My Investment</h1>
+            </div>
+            <div style="padding:32px;">
+                <h2 style="color:#08090d;font-size:22px;margin:0 0 16px;">${title}</h2>
+                <p style="color:#5b6473;font-size:15px;line-height:1.6;margin:0 0 16px;">
+                    Hi ${firstName},
+                </p>
+                <p style="color:#5b6473;font-size:15px;line-height:1.6;margin:0 0 16px;">
+                    ${message}
+                </p>
+                
+                ${amount ? `
+                <div style="background:#f3f4f6;border-left:4px solid ${accentColor};padding:16px;border-radius:8px;margin:24px 0;">
+                    <p style="color:#5b6473;font-size:13px;margin:0 0 4px;text-transform:uppercase;font-weight:600;">Amount</p>
+                    <p style="color:#08090d;font-size:24px;margin:0;font-weight:700;">$${formatMoney(amount)}</p>
+                    ${status ? `<p style="color:${accentColor};font-size:14px;margin:8px 0 0;font-weight:600;">Status: ${status}</p>` : ''}
+                </div>
+                ` : ''}
+
+                <div style="text-align:center;margin:28px 0;">
+                    <a href="https://myinvestments.cfd" style="background:${accentColor};color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;display:inline-block;">
+                        Go to Dashboard
+                    </a>
+                </div>
+                <p style="color:#5b6473;font-size:15px;line-height:1.6;margin:0;">
+                    Best regards,<br/>
+                    <strong>The My Investment Team</strong>
+                </p>
+            </div>
+            <div style="background:#f3f4f6;padding:16px 32px;text-align:center;">
+                <p style="color:#9ca3af;font-size:12px;margin:0;">
+                    This is an automated message. Please do not reply directly to this email.
+                </p>
+            </div>
+        </div>
+    </div>`;
+
+    try {
+        const { error } = await resend.emails.send({
+            from: "My Investment <noreply@myinvestments.cfd>",
+            to,
+            subject: title,
+            html
+        });
+        if (error) console.error("❌ Notification email failed:", error);
+    } catch (err) {
+        console.error("❌ Notification email exception:", err);
+    }
+}
+
 /* ---------------- HOME ---------------- */
 app.get("/", (req, res) => {
     res.json({ success: true, message: "🚀 Backend is running" });
@@ -129,7 +190,6 @@ app.post("/signup/send-code", async (req, res) => {
         return res.json({ success: false, message: "Email already exists." });
     }
 
-    // Create user with is_verified = false and email_verified = false
     const { error: dbError } = await supabase
         .from("users")
         .insert([{ 
@@ -204,7 +264,6 @@ app.post("/signup/verify", async (req, res) => {
         return res.status(401).json({ success: false, message: "Invalid verification code." });
     }
 
-    // ✅ Mark ONLY email_verified as true. is_verified stays false until KYC approval.
     const { error: updateError } = await supabase
         .from("users")
         .update({ email_verified: true })
@@ -214,7 +273,6 @@ app.post("/signup/verify", async (req, res) => {
         return res.status(500).json({ success: false, message: "Failed to verify email." });
     }
 
-    // ✉️ Send welcome notification (non-blocking)
     const { data: verifiedUser } = await supabase
         .from("users")
         .select("full_name")
@@ -226,7 +284,6 @@ app.post("/signup/verify", async (req, res) => {
         fullName: verifiedUser?.full_name
     });
 
-    // 💥 SMART TOKEN GENERATION
     const resetToken = crypto.randomBytes(32).toString('hex');
     const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
@@ -263,7 +320,6 @@ app.post("/signup", async (req, res) => {
         return res.status(400).json({ success: false, message: "Email already exists." });
     }
 
-    // ✅ is_verified stays false — admin will approve KYC later
     const { data, error } = await supabase
         .from("users")
         .insert([{ 
@@ -286,7 +342,7 @@ app.post("/signup", async (req, res) => {
     res.json({ success: true, message: "Account created.", user: data });
 });
 
-/* ---------------- LOGIN (CHECKS email_verified NOT is_verified) ---------------- */
+/* ---------------- LOGIN ---------------- */
 app.post("/login", async (req, res) => {
     const { email, password } = req.body;
 
@@ -305,7 +361,6 @@ app.post("/login", async (req, res) => {
         return res.status(401).json({ success: false, message: "Invalid email or password." });
     }
 
-    // ✅ Check email_verified instead of is_verified
     if (data.email_verified === false) {
         return res.status(403).json({ success: false, message: "Please verify your email address before logging in." });
     }
@@ -349,9 +404,7 @@ app.get("/user/:id", async (req, res) => {
     });
 });
 
-/* ==========================================================
-   ★ FORGOT PASSWORD
-========================================================== */
+/* ---------------- FORGOT PASSWORD ---------------- */
 app.post("/forgot-password", async (req, res) => {
     const { email } = req.body;
 
@@ -410,7 +463,7 @@ app.post("/forgot-password", async (req, res) => {
     }
 });
 
-/* ---------------- VERIFY CODE (For Forgot Password) ---------------- */
+/* ---------------- VERIFY CODE ---------------- */
 app.post("/verify-code", async (req, res) => {
     const { email, code } = req.body;
 
@@ -905,7 +958,7 @@ app.put("/admin/withdrawals/:id/approve", async (req, res) => {
 
     const { data: user } = await supabase
         .from("users")
-        .select("balance")
+        .select("balance, full_name, email")
         .eq("id", withdrawal.user_id)
         .single();
 
@@ -918,12 +971,25 @@ app.put("/admin/withdrawals/:id/approve", async (req, res) => {
         await supabase.from("transactions").update({ status: "Approved" }).eq("id", withdrawal.transaction_id);
     }
 
+    // 📧 SEND NOTIFICATION EMAIL
+    if (user && user.email) {
+        await sendNotificationEmail({
+            to: user.email,
+            fullName: user.full_name,
+            title: "Withdrawal Approved",
+            message: "Your withdrawal request has been successfully processed and sent to your wallet.",
+            amount: withdrawal.amount,
+            status: "Approved",
+            isError: false
+        });
+    }
+
     res.json({ success: true, message: "Withdrawal approved." });
 });
 
 /* ---------------- ADMIN REJECT WITHDRAWAL ---------------- */
 app.put("/admin/withdrawals/:id/reject", async (req, res) => {
-    const { data: withdrawal, error } = await supabase
+    const { data       : withdrawal, error } = await supabase
         .from("withdrawals")
         .select("*")
         .eq("id", req.params.id)
@@ -939,6 +1005,25 @@ app.put("/admin/withdrawals/:id/reject", async (req, res) => {
             status: "Rejected",
             description: "Withdrawal rejected. Please contact support."
         }).eq("id", withdrawal.transaction_id);
+    }
+
+    const { data: user } = await supabase
+        .from("users")
+        .select("full_name, email")
+        .eq("id", withdrawal.user_id)
+        .single();
+
+    // 📧 SEND NOTIFICATION EMAIL
+    if (user && user.email) {
+        await sendNotificationEmail({
+            to: user.email,
+            fullName: user.full_name,
+            title: "Withdrawal Rejected",
+            message: "Your recent withdrawal request was rejected. Please contact support for more information. Your funds have not been deducted.",
+            amount: withdrawal.amount,
+            status: "Rejected",
+            isError: true
+        });
     }
 
     res.json({ success: true, message: "Withdrawal rejected." });
@@ -995,7 +1080,7 @@ app.put("/admin/deposits/:id/approve", async (req, res) => {
 
     const { data: user } = await supabase
         .from("users")
-        .select("balance, btc_balance")
+        .select("balance, btc_balance, full_name, email")
         .eq("id", deposit.user_id)
         .single();
 
@@ -1007,6 +1092,19 @@ app.put("/admin/deposits/:id/approve", async (req, res) => {
 
     if (deposit.transaction_id) {
         await supabase.from("transactions").update({ status: "Approved" }).eq("id", deposit.transaction_id);
+    }
+
+    // 📧 SEND NOTIFICATION EMAIL
+    if (user && user.email) {
+        await sendNotificationEmail({
+            to: user.email,
+            fullName: user.full_name,
+            title: "Deposit Approved",
+            message: "Great news! Your deposit has been verified and the funds are now available in your account.",
+            amount: deposit.amount,
+            status: "Approved",
+            isError: false
+        });
     }
 
     res.json({ success: true, message: "Deposit approved." });
@@ -1027,6 +1125,25 @@ app.put("/admin/deposits/:id/reject", async (req, res) => {
 
     if (deposit.transaction_id) {
         await supabase.from("transactions").update({ status: "Rejected" }).eq("id", deposit.transaction_id);
+    }
+
+    const { data: user } = await supabase
+        .from("users")
+        .select("full_name, email")
+        .eq("id", deposit.user_id)
+        .single();
+
+    // 📧 SEND NOTIFICATION EMAIL
+    if (user && user.email) {
+        await sendNotificationEmail({
+            to: user.email,
+            fullName: user.full_name,
+            title: "Deposit Rejected",
+            message: "Your deposit request was rejected. This usually happens if the payment receipt is invalid or the funds were not received. Please contact support.",
+            amount: deposit.amount,
+            status: "Rejected",
+            isError: true
+        });
     }
 
     res.json({ success: true, message: "Deposit rejected." });
@@ -1080,10 +1197,7 @@ app.post("/support/messages", async (req, res) => {
     res.json({ success: true, message: data });
 });
 
-/* ==========================================================
-   ★ DEPOSIT WALLET ADDRESSES (All Coins)
-   ========================================================== */
-
+/* ---------------- DEPOSIT WALLET ADDRESSES ---------------- */
 app.get("/settings/deposit-addresses", async (req, res) => {
     const { data, error } = await supabase
         .from("platform_settings")
@@ -1133,10 +1247,7 @@ app.put("/admin/settings/deposit-addresses", async (req, res) => {
     res.json({ success: true, message: "Deposit addresses updated successfully.", addresses: data });
 });
 
-/* ==========================================================
-   ★ USER KYC SUBMISSION
-   ========================================================== */
-
+/* ---------------- USER KYC SUBMISSION ---------------- */
 app.post("/kyc", upload.fields([
     { name: 'front_image', maxCount: 1 },
     { name: 'back_image', maxCount: 1 }
@@ -1148,7 +1259,6 @@ app.post("/kyc", upload.fields([
             return res.status(400).json({ success: false, message: "All required fields must be provided." });
         }
 
-        // Check if user already has a pending or approved KYC
         const { data: existingKyc } = await supabase
             .from("kyc_requests")
             .select("id, status")
@@ -1163,19 +1273,17 @@ app.post("/kyc", upload.fields([
             });
         }
 
-        // Upload Front Image
         const frontFile = req.files['front_image'][0];
         const frontFileName = `kyc-${user_id}-${Date.now()}-front.${frontFile.originalname.split('.').pop()}`;
         
         const { error: frontErr } = await supabase.storage
-            .from("kyc_documents") // Make sure this bucket exists in Supabase!
+            .from("kyc_documents")
             .upload(frontFileName, frontFile.buffer, { contentType: frontFile.mimetype });
 
         if (frontErr) throw new Error("Failed to upload front image: " + frontErr.message);
 
         const { data: frontUrlData } = supabase.storage.from("kyc_documents").getPublicUrl(frontFileName);
 
-        // Upload Back Image (if provided)
         let back_image_url = null;
         if (req.files['back_image']) {
             const backFile = req.files['back_image'][0];
@@ -1191,7 +1299,6 @@ app.post("/kyc", upload.fields([
             back_image_url = backUrlData.publicUrl;
         }
 
-        // Save to Database
         const { data, error } = await supabase
             .from("kyc_requests")
             .insert([{
@@ -1224,7 +1331,6 @@ app.get("/kyc/status/:userId", async (req, res) => {
             .limit(1)
             .single();
 
-        // If no record found, return null (frontend will show the form)
         if (error && error.code === 'PGRST116') {
             return res.json({ success: true, kyc: null });
         }
@@ -1247,10 +1353,7 @@ app.get("/kyc/status/:userId", async (req, res) => {
     }
 });
 
-/* ==========================================================
-   ★ ADMIN KYC VERIFICATION
-   ========================================================== */
-
+/* ---------------- ADMIN KYC VERIFICATION ---------------- */
 app.get("/admin/kyc", async (req, res) => {
     const { data, error } = await supabase
         .from("kyc_requests")
@@ -1267,7 +1370,7 @@ app.get("/admin/kyc", async (req, res) => {
             .eq("id", k.user_id)
             .single();
 
-        enriched.push({
+ enriched.push({
             ...k,
             full_name: user?.full_name || "Unknown",
             email: user?.email || "N/A"
@@ -1294,17 +1397,33 @@ app.put("/admin/kyc/:id/approve", async (req, res) => {
 
     if (updateKycError) return res.status(500).json({ success: false, message: updateKycError.message });
 
-    // ✅ NOW this is the only place is_verified becomes true
     await supabase
         .from("users")
         .update({ is_verified: true })
         .eq("id", kyc.user_id);
 
+    // 📧 SEND NOTIFICATION EMAIL
+    const { data: user } = await supabase
+        .from("users")
+        .select("full_name, email")
+        .eq("id", kyc.user_id)
+        .single();
+
+    if (user && user.email) {
+        await sendNotificationEmail({
+            to: user.email,
+            fullName: user.full_name,
+            title: "KYC Verification Approved",
+            message: "Congratulations! Your identity has been successfully verified. Your account now has full access to all platform features and higher withdrawal limits.",
+            isError: false
+        });
+    }
+
     res.json({ success: true, message: "KYC approved successfully." });
 });
 
 app.put("/admin/kyc/:id/reject", async (req, res) => {
-    const { rejection_reason } = req.body; // <-- Added to capture reason
+    const { rejection_reason } = req.body;
 
     const { data: kyc, error } = await supabase
         .from("kyc_requests")
@@ -1319,15 +1438,32 @@ app.put("/admin/kyc/:id/reject", async (req, res) => {
         .from("kyc_requests")
         .update({ 
             status: "Rejected",
-            rejection_reason: rejection_reason || "Document unclear or invalid." // <-- Saved here
+            rejection_reason: rejection_reason || "Document unclear or invalid."
         })
         .eq("id", req.params.id);
 
-    // Ensure is_verified stays false on rejection
     await supabase
         .from("users")
         .update({ is_verified: false })
         .eq("id", kyc.user_id);
+
+    // 📧 SEND NOTIFICATION EMAIL
+    const { data: user } = await supabase
+        .from("users")
+        .select("full_name, email")
+        .eq("id", kyc.user_id)
+        .single();
+
+    if (user && user.email) {
+        const reason = rejection_reason || "Document unclear or invalid.";
+        await sendNotificationEmail({
+            to: user.email,
+            fullName: user.full_name,
+            title: "KYC Verification Rejected",
+            message: `Unfortunately, we could not verify your identity. Reason: ${reason}. Please log in to your dashboard and resubmit valid documents.`,
+            isError: true
+        });
+    }
 
     res.json({ success: true, message: "KYC rejected." });
 });

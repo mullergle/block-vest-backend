@@ -14,6 +14,9 @@ const CODE_EXPIRY = 10 * 60 * 1000; // 10 minutes
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ✅ NEW: Temporary in-memory store for reset tokens (Fixes the database bug)
+const inMemoryTokens = {};
+
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
@@ -457,8 +460,7 @@ app.post("/forgot-password", async (req, res) => {
     }
 });
 
-/* ---------------- VERIFY CODE ---------------- */
-/* ---------------- VERIFY CODE ---------------- */
+/* ---------------- VERIFY CODE (FIXED) ---------------- */
 app.post("/verify-code", async (req, res) => {
     let { email, code } = req.body;
 
@@ -487,16 +489,21 @@ app.post("/verify-code", async (req, res) => {
         return res.status(401).json({ success: false, message: "Invalid verification code." });
     }
 
-    // Generate a token
+    // Generate token
     const resetToken = crypto.randomBytes(32).toString('hex');
-    const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    
+    // ✅ SAVE TO MEMORY (Bypasses Supabase update bug entirely)
+    inMemoryTokens[email] = {
+        token: resetToken,
+        expires: Date.now() + 15 * 60 * 1000 // 15 minutes
+    };
 
-    // Save the token AND set a flag indicating this session is authorized
+    // Try to update DB just in case, but don't rely on it
     await supabase
         .from("password_resets")
         .update({ 
             token: resetToken,
-            token_expires_at: tokenExpiresAt
+            token_expires_at: new Date(inMemoryTokens[email].expires).toISOString()
         })
         .eq("email", email);
 
@@ -507,7 +514,7 @@ app.post("/verify-code", async (req, res) => {
     });
 });
 
-/* ---------------- RESET PASSWORD (BULLETPROOF VERSION) ---------------- */
+/* ---------------- RESET PASSWORD (FIXED) ---------------- */
 app.post("/reset-password", async (req, res) => {
     let { email, password, token } = req.body;
 
@@ -515,30 +522,25 @@ app.post("/reset-password", async (req, res) => {
         return res.status(400).json({ success: false, message: "Missing required fields." });
     }
 
-    // Clean the email
     email = email.trim().toLowerCase();
 
     try {
-        // Fetch the reset record by email
-        const { data: resetData, error: fetchErr } = await supabase
-            .from("password_resets")
-            .select("*")
-            .eq("email", email)
-            .single();
+        // ✅ CHECK MEMORY INSTEAD OF DATABASE
+        const session = inMemoryTokens[email];
 
-        if (fetchErr || !resetData) {
-            return res.status(403).json({ success: false, message: "Invalid or expired reset session. Please request a new code." });
-        }
-
-        // Check expiry of the session (15 minutes)
-        if (new Date() > new Date(resetData.token_expires_at)) {
-            await supabase.from("password_resets").delete().eq("email", email);
-            return res.status(403).json({ success: false, message: "Session expired. Please request a new code." });
-        }
-
-        // Verify that a token actually exists in the DB
-        if (!resetData.token) {
+        if (!session) {
+            console.log("No session found in memory for:", email);
             return res.status(403).json({ success: false, message: "Invalid session. Please request a new code." });
+        }
+
+        if (session.token !== token) {
+            console.log("Token mismatch in memory.");
+            return res.status(403).json({ success: false, message: "Invalid session. Please request a new code." });
+        }
+
+        if (Date.now() > session.expires) {
+            delete inMemoryTokens[email];
+            return res.status(403).json({ success: false, message: "Session expired. Please request a new code." });
         }
 
         // Update the password
@@ -551,7 +553,9 @@ app.post("/reset-password", async (req, res) => {
             return res.status(500).json({ success: false, message: updateError.message });
         }
 
-        // Delete the reset record so it can't be reused
+        // Clean up memory
+        delete inMemoryTokens[email];
+        // Try to clean up DB
         await supabase.from("password_resets").delete().eq("email", email);
 
         res.json({ success: true, message: "Password reset successfully." });

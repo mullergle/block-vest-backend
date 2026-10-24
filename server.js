@@ -14,7 +14,7 @@ const CODE_EXPIRY = 10 * 60 * 1000; // 10 minutes
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ✅ NEW: Temporary in-memory store for reset tokens (Fixes the database bug)
+// ✅ Temporary in-memory store for reset tokens
 const inMemoryTokens = {};
 
 const upload = multer({
@@ -171,7 +171,7 @@ app.get("/test", async (req, res) => {
 
 /* ---------------- SIGNUP: SEND CODE ---------------- */
 app.post("/signup/send-code", async (req, res) => {
-    const { fullName, phone, country, email, password } = req.body;
+    const { fullName, phone, country, email, password, referred_by } = req.body;
 
     if (!email) {
         return res.status(400).json({ success: false, message: "Email is required." });
@@ -196,7 +196,8 @@ app.post("/signup/send-code", async (req, res) => {
             email, 
             password,
             is_verified: false,
-            email_verified: false
+            email_verified: false,
+            referred_by: referred_by || null
         }]);
 
     if (dbError) {
@@ -374,7 +375,7 @@ app.post("/login", async (req, res) => {
     });
 });
 
-/* ---------------- GET USER (UPDATED) ---------------- */
+/* ---------------- GET USER (UPDATED WITH REFERRAL) ---------------- */
 app.get("/user/:id", async (req, res) => {
     const { data, error } = await supabase
         .from("users")
@@ -386,7 +387,19 @@ app.get("/user/:id", async (req, res) => {
         return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    // ✅ Fetch all transactions to calculate real totals
+    // ✅ GENERATE REFERRAL CODE IF MISSING
+    let refCode = data.referral_code;
+    if (!refCode) {
+        refCode = String(data.id) + Math.random().toString(36).substring(2, 6).toUpperCase();
+        await supabase.from("users").update({ referral_code: refCode }).eq("id", data.id);
+    }
+
+    // Count how many users were referred by this user
+    const { count: referralCount } = await supabase
+        .from("users")
+        .select("*", { count: "exact", head: true })
+        .eq("referred_by", refCode);
+
     const { data: txns } = await supabase
         .from("transactions")
         .select("type, amount, status")
@@ -408,9 +421,11 @@ app.get("/user/:id", async (req, res) => {
         success: true,
         user: {
             ...data,
+            referral_code: refCode,
+            referral_count: referralCount || 0,
+            total_earned_display: formatMoney(data.total_earned || 0),
             balance_display: formatMoney(data.balance),
             total_trade_display: formatMoney(data.total_trade),
-            // ✅ NEW KEYS matching the frontend
             total_deposit_display: formatMoney(totalDeposit),
             total_withdrawal_display: formatMoney(totalWithdrawal),
             btc_balance_display: formatMoney(data.btc_balance),

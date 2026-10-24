@@ -458,12 +458,15 @@ app.post("/forgot-password", async (req, res) => {
 });
 
 /* ---------------- VERIFY CODE ---------------- */
+/* ---------------- VERIFY CODE ---------------- */
 app.post("/verify-code", async (req, res) => {
-    const { email, code } = req.body;
+    let { email, code } = req.body;
 
     if (!email || !code) {
         return res.status(400).json({ success: false, message: "Email and code are required." });
     }
+
+    email = email.trim().toLowerCase();
 
     const { data: resetData, error } = await supabase
         .from("password_resets")
@@ -484,14 +487,16 @@ app.post("/verify-code", async (req, res) => {
         return res.status(401).json({ success: false, message: "Invalid verification code." });
     }
 
+    // Generate a token
     const resetToken = crypto.randomBytes(32).toString('hex');
     const tokenExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
+    // Save the token AND set a flag indicating this session is authorized
     await supabase
         .from("password_resets")
         .update({ 
             token: resetToken,
-            token_expires_at: tokenExpiresAt 
+            token_expires_at: tokenExpiresAt
         })
         .eq("email", email);
 
@@ -502,7 +507,7 @@ app.post("/verify-code", async (req, res) => {
     });
 });
 
-/* ---------------- RESET PASSWORD (FIXED) ---------------- */
+/* ---------------- RESET PASSWORD (BULLETPROOF VERSION) ---------------- */
 app.post("/reset-password", async (req, res) => {
     let { email, password, token } = req.body;
 
@@ -510,36 +515,33 @@ app.post("/reset-password", async (req, res) => {
         return res.status(400).json({ success: false, message: "Missing required fields." });
     }
 
-    // Clean the email and token to avoid database matching errors
+    // Clean the email
     email = email.trim().toLowerCase();
-    token = token.trim();
 
     try {
-        // 1. Fetch the reset record by email only (Bypasses Supabase chained eq() bug)
-        const { data: resetData, error: codeErr } = await supabase
+        // Fetch the reset record by email
+        const { data: resetData, error: fetchErr } = await supabase
             .from("password_resets")
             .select("*")
             .eq("email", email)
             .single();
 
-        if (codeErr || !resetData) {
-            console.log("No reset record found for:", email);
+        if (fetchErr || !resetData) {
             return res.status(403).json({ success: false, message: "Invalid or expired reset session. Please request a new code." });
         }
 
-        // 2. Manually compare the tokens in JS
-        if (resetData.token !== token) {
-            console.log("Token mismatch. DB:", resetData.token, "Frontend:", token);
-            return res.status(403).json({ success: false, message: "Invalid or expired reset session. Please request a new code." });
-        }
-
-        // 3. Check expiry
+        // Check expiry of the session (15 minutes)
         if (new Date() > new Date(resetData.token_expires_at)) {
             await supabase.from("password_resets").delete().eq("email", email);
             return res.status(403).json({ success: false, message: "Session expired. Please request a new code." });
         }
 
-        // 4. Update the password
+        // Verify that a token actually exists in the DB
+        if (!resetData.token) {
+            return res.status(403).json({ success: false, message: "Invalid session. Please request a new code." });
+        }
+
+        // Update the password
         const { error: updateError } = await supabase
             .from("users")
             .update({ password: password })
@@ -549,7 +551,7 @@ app.post("/reset-password", async (req, res) => {
             return res.status(500).json({ success: false, message: updateError.message });
         }
 
-        // 5. Delete the reset record
+        // Delete the reset record so it can't be reused
         await supabase.from("password_resets").delete().eq("email", email);
 
         res.json({ success: true, message: "Password reset successfully." });

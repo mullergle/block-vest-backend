@@ -13,8 +13,11 @@ const CODE_EXPIRY = 10 * 60 * 1000; // 10 minutes
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Updated multer to accept multiple fields for KYC
 const upload = multer({
-    storage: multer.memoryStorage()
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 10 * 1024 * 1024 } // 10MB limit
 });
 
 // Middlewares
@@ -1131,6 +1134,120 @@ app.put("/admin/settings/deposit-addresses", async (req, res) => {
 });
 
 /* ==========================================================
+   ★ USER KYC SUBMISSION
+   ========================================================== */
+
+app.post("/kyc", upload.fields([
+    { name: 'front_image', maxCount: 1 },
+    { name: 'back_image', maxCount: 1 }
+]), async (req, res) => {
+    try {
+        const { user_id, document_type, document_number } = req.body;
+
+        if (!user_id || !document_type || !document_number || !req.files['front_image']) {
+            return res.status(400).json({ success: false, message: "All required fields must be provided." });
+        }
+
+        // Check if user already has a pending or approved KYC
+        const { data: existingKyc } = await supabase
+            .from("kyc_requests")
+            .select("id, status")
+            .eq("user_id", user_id)
+            .in("status", ["Pending", "Approved"])
+            .single();
+
+        if (existingKyc) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `You already have a ${existingKyc.status.toLowerCase()} KYC request.` 
+            });
+        }
+
+        // Upload Front Image
+        const frontFile = req.files['front_image'][0];
+        const frontFileName = `kyc-${user_id}-${Date.now()}-front.${frontFile.originalname.split('.').pop()}`;
+        
+        const { error: frontErr } = await supabase.storage
+            .from("kyc_documents") // Make sure this bucket exists in Supabase!
+            .upload(frontFileName, frontFile.buffer, { contentType: frontFile.mimetype });
+
+        if (frontErr) throw new Error("Failed to upload front image: " + frontErr.message);
+
+        const { data: frontUrlData } = supabase.storage.from("kyc_documents").getPublicUrl(frontFileName);
+
+        // Upload Back Image (if provided)
+        let back_image_url = null;
+        if (req.files['back_image']) {
+            const backFile = req.files['back_image'][0];
+            const backFileName = `kyc-${user_id}-${Date.now()}-back.${backFile.originalname.split('.').pop()}`;
+            
+            const { error: backErr } = await supabase.storage
+                .from("kyc_documents")
+                .upload(backFileName, backFile.buffer, { contentType: backFile.mimetype });
+
+            if (backErr) throw new Error("Failed to upload back image: " + backErr.message);
+
+            const { data: backUrlData } = supabase.storage.from("kyc_documents").getPublicUrl(backFileName);
+            back_image_url = backUrlData.publicUrl;
+        }
+
+        // Save to Database
+        const { data, error } = await supabase
+            .from("kyc_requests")
+            .insert([{
+                user_id,
+                document_type,
+                document_number,
+                front_image_url: frontUrlData.publicUrl,
+                back_image_url: back_image_url,
+                status: "Pending"
+            }])
+            .select();
+
+        if (error) throw error;
+
+        res.json({ success: true, message: "KYC submitted successfully.", kyc: data[0] });
+
+    } catch (error) {
+        console.error("KYC SUBMIT ERROR:", error);
+        res.status(500).json({ success: false, message: error.message || "Failed to submit KYC." });
+    }
+});
+
+app.get("/kyc/status/:userId", async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from("kyc_requests")
+            .select("*")
+            .eq("user_id", req.params.userId)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .single();
+
+        // If no record found, return null (frontend will show the form)
+        if (error && error.code === 'PGRST116') {
+            return res.json({ success: true, kyc: null });
+        }
+
+        if (error) throw error;
+
+        res.json({ 
+            success: true, 
+            kyc: {
+                status: data.status,
+                document_type: data.document_type,
+                submitted_at: data.created_at,
+                rejection_reason: data.rejection_reason || null
+            } 
+        });
+
+    } catch (error) {
+        console.error("KYC STATUS ERROR:", error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
+
+/* ==========================================================
    ★ ADMIN KYC VERIFICATION
    ========================================================== */
 
@@ -1187,6 +1304,8 @@ app.put("/admin/kyc/:id/approve", async (req, res) => {
 });
 
 app.put("/admin/kyc/:id/reject", async (req, res) => {
+    const { rejection_reason } = req.body; // <-- Added to capture reason
+
     const { data: kyc, error } = await supabase
         .from("kyc_requests")
         .select("*")
@@ -1198,7 +1317,10 @@ app.put("/admin/kyc/:id/reject", async (req, res) => {
 
     await supabase
         .from("kyc_requests")
-        .update({ status: "Rejected" })
+        .update({ 
+            status: "Rejected",
+            rejection_reason: rejection_reason || "Document unclear or invalid." // <-- Saved here
+        })
         .eq("id", req.params.id);
 
     // Ensure is_verified stays false on rejection

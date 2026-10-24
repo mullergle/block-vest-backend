@@ -1606,6 +1606,77 @@ app.get("/chat/notification/:userId", async (req, res) => {
     }
 });
 
+/* ---------------- EXECUTE TRADE ---------------- */
+app.post("/trade", async (req, res) => {
+    const { user_id, trade_type, pair, action, amount, lot_size, stop_loss } = req.body;
+
+    if (!user_id || !trade_type || !pair || !action || !amount) {
+        return res.status(400).json({ success: false, message: "Missing required trade details." });
+    }
+
+    const numericAmount = Number(amount);
+    if (isNaN(numericAmount) || numericAmount <= 0) {
+        return res.status(400).json({ success: false, message: "Invalid trade amount." });
+    }
+
+    try {
+        // 1. Check user balance
+        const { data: user, error: userErr } = await supabase
+            .from("users")
+            .select("balance")
+            .eq("id", user_id)
+            .single();
+
+        if (userErr || !user) {
+            return res.status(404).json({ success: false, message: "User not found." });
+        }
+
+        const currentBalance = Number(user.balance || 0);
+        if (numericAmount > currentBalance) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Insufficient balance. Available: $${currentBalance.toFixed(2)}` 
+            });
+        }
+
+        // 2. Deduct balance
+        const newBalance = currentBalance - numericAmount;
+        await supabase.from("users").update({ balance: newBalance }).eq("id", user_id);
+
+        // 3. Log the trade in transactions table
+        const description = `${action} ${pair} (${lot_size} lots)${stop_loss ? ` | SL: ${stop_loss}` : ''}`;
+        
+        const { data: txnData, error: txnError } = await supabase
+            .from("transactions")
+            .insert([{
+                user_id,
+                type: trade_type, // "Crypto" or "Forex"
+                amount: numericAmount,
+                status: "Approved", // Trades are executed instantly
+                description: description
+            }])
+            .select();
+
+        if (txnError) {
+            // Rollback balance if transaction fails
+            await supabase.from("users").update({ balance: currentBalance }).eq("id", user_id);
+            console.error("Trade log error:", txnError);
+            return res.status(500).json({ success: false, message: "Failed to log trade." });
+        }
+
+        res.json({ 
+            success: true, 
+            message: `${action} order for ${pair} executed successfully!`,
+            new_balance: newBalance,
+            trade: txnData[0]
+        });
+
+    } catch (error) {
+        console.error("TRADE ERROR:", error);
+        res.status(500).json({ success: false, message: "Internal server error." });
+    }
+});
+
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

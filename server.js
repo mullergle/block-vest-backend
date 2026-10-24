@@ -502,42 +502,62 @@ app.post("/verify-code", async (req, res) => {
     });
 });
 
-/* ---------------- RESET PASSWORD ---------------- */
+/* ---------------- RESET PASSWORD (FIXED) ---------------- */
 app.post("/reset-password", async (req, res) => {
-    const { email, password, token } = req.body;
+    let { email, password, token } = req.body;
 
     if (!email || !password || !token) {
         return res.status(400).json({ success: false, message: "Missing required fields." });
     }
 
-    const { data: resetData, error: codeErr } = await supabase
-        .from("password_resets")
-        .select("*")
-        .eq("email", email)
-        .eq("token", token)
-        .single();
+    // Clean the email and token to avoid database matching errors
+    email = email.trim().toLowerCase();
+    token = token.trim();
 
-    if (codeErr || !resetData) {
-        return res.status(403).json({ success: false, message: "Invalid or expired reset session. Please request a new code." });
-    }
+    try {
+        // 1. Fetch the reset record by email only (Bypasses Supabase chained eq() bug)
+        const { data: resetData, error: codeErr } = await supabase
+            .from("password_resets")
+            .select("*")
+            .eq("email", email)
+            .single();
 
-    if (new Date() > new Date(resetData.token_expires_at)) {
+        if (codeErr || !resetData) {
+            console.log("No reset record found for:", email);
+            return res.status(403).json({ success: false, message: "Invalid or expired reset session. Please request a new code." });
+        }
+
+        // 2. Manually compare the tokens in JS
+        if (resetData.token !== token) {
+            console.log("Token mismatch. DB:", resetData.token, "Frontend:", token);
+            return res.status(403).json({ success: false, message: "Invalid or expired reset session. Please request a new code." });
+        }
+
+        // 3. Check expiry
+        if (new Date() > new Date(resetData.token_expires_at)) {
+            await supabase.from("password_resets").delete().eq("email", email);
+            return res.status(403).json({ success: false, message: "Session expired. Please request a new code." });
+        }
+
+        // 4. Update the password
+        const { error: updateError } = await supabase
+            .from("users")
+            .update({ password: password })
+            .eq("email", email);
+
+        if (updateError) {
+            return res.status(500).json({ success: false, message: updateError.message });
+        }
+
+        // 5. Delete the reset record
         await supabase.from("password_resets").delete().eq("email", email);
-        return res.status(403).json({ success: false, message: "Session expired. Please request a new code." });
+
+        res.json({ success: true, message: "Password reset successfully." });
+
+    } catch (error) {
+        console.error("RESET PASSWORD ERROR:", error);
+        res.status(500).json({ success: false, message: "Internal server error." });
     }
-
-    const { error: updateError } = await supabase
-        .from("users")
-        .update({ password: password })
-        .eq("email", email);
-
-    if (updateError) {
-        return res.status(500).json({ success: false, message: updateError.message });
-    }
-
-    await supabase.from("password_resets").delete().eq("email", email);
-
-    res.json({ success: true, message: "Password reset successfully." });
 });
 
 /* ---------------- WITHDRAW ---------------- */
@@ -1442,7 +1462,6 @@ app.put("/admin/kyc/:id/reject", async (req, res) => {
 });
 
 /* ---------------- ADMIN CHAT ---------------- */
-// UPDATED: Now fetches user details instead of just IDs
 app.get("/admin/support/users", async (req, res) => {
     try {
         const { data: messages, error } = await supabase

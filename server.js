@@ -1830,7 +1830,7 @@ app.post("/copy-trade/execute", async (req, res) => {
 
         await supabase.from("transactions").insert([{
             user_id,
-            type: "Copy Trade",
+            type: "Copy Out", /* CHANGED: Marks money leaving */
             amount: numericAmount,
             status: "Approved",
             description: `Started copying ${trader_name}`
@@ -1882,7 +1882,7 @@ app.delete("/copy-trade/unfollow/:trader_name", async (req, res) => {
 
         await supabase.from("transactions").insert([{
             user_id,
-            type: "Copy Trade",
+            type: "Copy In", /* CHANGED: Marks money returning */
             amount: returnAmount,
             status: "Approved",
             description: `Stopped copying ${traderName} — returned $${returnAmount.toFixed(2)}`

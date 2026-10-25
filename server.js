@@ -1760,6 +1760,51 @@ app.post("/trade", async (req, res) => {
     }
 });
 
+/* ---------------- COPY TRADING (FOLLOWING TRADERS) ---------------- */
+app.post("/copy-trade/follow", async (req, res) => {
+    try {
+        const { user_id, trader_name, trader_badge } = req.body;
+        if (!user_id || !trader_name) {
+            return res.status(400).json({ success: false, message: "User ID and trader name are required." });
+        }
+        const { data: existing } = await supabase.from("copy_trades").select("id").eq("user_id", user_id).eq("trader_name", trader_name).single();
+        if (existing) return res.status(400).json({ success: false, message: "You are already following this trader." });
+
+        const { data, error } = await supabase.from("copy_trades")
+            .insert([{ user_id, trader_name, trader_badge: trader_badge || 'Expert' }])
+            .select().single();
+        if (error) throw error;
+        res.json({ success: true, message: `You are now following ${trader_name}.`, copy: data });
+    } catch (err) {
+        console.error("COPY FOLLOW ERROR:", err);
+        res.status(500).json({ success: false, message: "Failed to follow trader." });
+    }
+});
+
+app.delete("/copy-trade/unfollow/:trader_name", async (req, res) => {
+    try {
+        const { user_id } = req.query;
+        const traderName = decodeURIComponent(req.params.trader_name);
+        if (!user_id) return res.status(400).json({ success: false, message: "User ID is required." });
+
+        const { error } = await supabase.from("copy_trades").delete().eq("user_id", user_id).eq("trader_name", traderName);
+        if (error) throw error;
+        res.json({ success: true, message: `You have unfollowed ${traderName}.` });
+    } catch (err) {
+        res.status(500).json({ success: false, message: "Failed to unfollow trader." });
+    }
+});
+
+app.get("/copy-trade/mine/:user_id", async (req, res) => {
+    try {
+        const { data, error } = await supabase.from("copy_trades").select("*").eq("user_id", req.params.user_id).order("created_at", { ascending: false });
+        if (error) throw error;
+        res.json({ success: true, trades: data || [] });
+    } catch (err) {
+        res.status(500).json({ success: false, message: "Failed to load copy trades." });
+    }
+});
+
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {
     console.log(`Server running on port ${PORT}`);

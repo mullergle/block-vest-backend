@@ -1587,7 +1587,7 @@ app.get("/admin/support/unread", async (req, res) => {
     res.json({ success: true, unread: count || 0 });
 });
 
-/* ---------------- ADMIN: PER-USER SUPPORT STATUS (NEW) ---------------- */
+/* ---------------- ADMIN: PER-USER SUPPORT STATUS ---------------- */
 app.get("/admin/support/user-status", async (req, res) => {
     try {
         const { data, error } = await supabase
@@ -1807,6 +1807,27 @@ app.post("/copy-trade/execute", async (req, res) => {
             return res.status(400).json({ success: false, message: "You are already copying this trader." });
         }
 
+        // ✅ FIX: Insert the debit transaction FIRST, before deducting balance.
+        // If it fails, nothing is changed. This keeps the ledger consistent.
+        const { data: txnData, error: txnErr } = await supabase
+            .from("transactions")
+            .insert([{
+                user_id,
+                type: "Copy Out",
+                amount: numericAmount,
+                status: "Approved",
+                description: `Started copying ${trader_name}`
+            }])
+            .select();
+
+        if (txnErr) {
+            console.error("❌ Copy Out txn insert failed:", txnErr);
+            return res.status(500).json({
+                success: false,
+                message: "Failed to log the copy trade. Please check the transactions table schema (type/status enums must include 'Copy Out' and 'Approved')."
+            });
+        }
+
         const newBalance = userBalance - numericAmount;
         await supabase.from("users").update({ balance: newBalance }).eq("id", user_id);
 
@@ -1824,17 +1845,12 @@ app.post("/copy-trade/execute", async (req, res) => {
             .single();
 
         if (copyErr) {
+            // Roll back the transaction and balance
+            await supabase.from("transactions").delete().eq("id", txnData[0].id);
             await supabase.from("users").update({ balance: userBalance }).eq("id", user_id);
-            throw copyErr;
+            console.error("❌ Copy trade insert failed:", copyErr);
+            return res.status(500).json({ success: false, message: "Failed to create copy trade." });
         }
-
-        await supabase.from("transactions").insert([{
-            user_id,
-            type: "Copy Out", /* CHANGED: Marks money leaving */
-            amount: numericAmount,
-            status: "Approved",
-            description: `Started copying ${trader_name}`
-        }]);
 
         res.json({ 
             success: true, 
@@ -1849,6 +1865,11 @@ app.post("/copy-trade/execute", async (req, res) => {
 });
 
 /* ---- 2. Unfollow (returns current value to balance) ---- */
+// ✅ FIXES APPLIED:
+//   1. Insert the refund transaction FIRST and check the error before touching balance/copy_trades.
+//   2. Only delete the copy_trade after the refund txn is confirmed.
+//   3. Return the original amount and the actual refunded amount in the response so the client
+//      can display both, and log the profit/loss in the description.
 app.delete("/copy-trade/unfollow/:trader_name", async (req, res) => {
     try {
         const { user_id } = req.query;
@@ -1867,7 +1888,28 @@ app.delete("/copy-trade/unfollow/:trader_name", async (req, res) => {
             return res.status(404).json({ success: false, message: "Copy trade not found." });
         }
 
-        const returnAmount = Number(copy.current_value || copy.amount || 0);
+        const originalAmount = Number(copy.amount || 0);
+        const returnAmount = Number(copy.current_value || originalAmount || 0);
+        const profit = returnAmount - originalAmount;
+
+        // ✅ FIX #1: Write the refund txn FIRST. If this fails, do not proceed.
+        const { error: txnErr } = await supabase
+            .from("transactions")
+            .insert([{
+                user_id,
+                type: "Copy In",
+                amount: returnAmount,
+                status: "Approved",
+                description: `Stopped copying ${traderName} — returned $${returnAmount.toFixed(2)} (P/L: ${profit >= 0 ? '+' : ''}$${profit.toFixed(2)})`
+            }]);
+
+        if (txnErr) {
+            console.error("❌ Refund txn insert failed:", txnErr);
+            return res.status(500).json({
+                success: false,
+                message: "Could not log the refund. Please ensure the 'transactions' table 'type' enum includes 'Copy In' and 'status' includes 'Approved'."
+            });
+        }
 
         const { data: user } = await supabase
             .from("users")
@@ -1878,21 +1920,18 @@ app.delete("/copy-trade/unfollow/:trader_name", async (req, res) => {
         const newBalance = Number(user.balance || 0) + returnAmount;
         await supabase.from("users").update({ balance: newBalance }).eq("id", user_id);
 
-        await supabase.from("copy_trades").delete().eq("id", copy.id);
-
-        await supabase.from("transactions").insert([{
-            user_id,
-            type: "Copy In", /* CHANGED: Marks money returning */
-            amount: returnAmount,
-            status: "Approved",
-            description: `Stopped copying ${traderName} — returned $${returnAmount.toFixed(2)}`
-        }]);
-
-        const profit = returnAmount - Number(copy.amount || 0);
+        // ✅ FIX #2: Only delete the copy trade after the refund was written.
+        const { error: delErr } = await supabase.from("copy_trades").delete().eq("id", copy.id);
+        if (delErr) {
+            // The refund already went through; log loudly but don't fail the request,
+            // otherwise the client will retry and double-refund.
+            console.error("⚠️ Refund succeeded but copy_trade delete failed:", delErr);
+        }
 
         res.json({ 
             success: true, 
             message: `You stopped copying ${traderName}. $${returnAmount.toFixed(2)} returned to your balance.`,
+            original_amount: originalAmount,
             returned: returnAmount,
             profit: profit,
             new_balance: newBalance

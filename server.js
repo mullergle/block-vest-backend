@@ -1760,50 +1760,198 @@ app.post("/trade", async (req, res) => {
     }
 });
 
-/* ---------------- COPY TRADING (FOLLOWING TRADERS) ---------------- */
-app.post("/copy-trade/follow", async (req, res) => {
-    try {
-        const { user_id, trader_name, trader_badge } = req.body;
-        if (!user_id || !trader_name) {
-            return res.status(400).json({ success: false, message: "User ID and trader name are required." });
-        }
-        const { data: existing } = await supabase.from("copy_trades").select("id").eq("user_id", user_id).eq("trader_name", trader_name).single();
-        if (existing) return res.status(400).json({ success: false, message: "You are already following this trader." });
+/* ================================================================ */
+/* ============= COPY TRADING WITH P&L SIMULATION ================= */
+/* ================================================================ */
 
-        const { data, error } = await supabase.from("copy_trades")
-            .insert([{ user_id, trader_name, trader_badge: trader_badge || 'Expert' }])
-            .select().single();
-        if (error) throw error;
-        res.json({ success: true, message: `You are now following ${trader_name}.`, copy: data });
+/* ---- 1. Execute a copy trade (deducts money, creates position) ---- */
+app.post("/copy-trade/execute", async (req, res) => {
+    try {
+        const { user_id, trader_name, trader_badge, amount } = req.body;
+        
+        if (!user_id || !trader_name || !amount) {
+            return res.status(400).json({ success: false, message: "User ID, trader name, and amount are required." });
+        }
+
+        const numericAmount = Number(amount);
+        if (isNaN(numericAmount) || numericAmount <= 0) {
+            return res.status(400).json({ success: false, message: "Invalid copy amount." });
+        }
+
+        const { data: user, error: userErr } = await supabase
+            .from("users")
+            .select("balance, full_name, email")
+            .eq("id", user_id)
+            .single();
+
+        if (userErr || !user) {
+            return res.status(404).json({ success: false, message: "User not found." });
+        }
+
+        const userBalance = Number(user.balance || 0);
+        if (numericAmount > userBalance) {
+            return res.status(400).json({ 
+                success: false, 
+                message: `Insufficient balance. Available: $${userBalance.toFixed(2)}` 
+            });
+        }
+
+        const { data: existing } = await supabase
+            .from("copy_trades")
+            .select("id")
+            .eq("user_id", user_id)
+            .eq("trader_name", trader_name)
+            .single();
+
+        if (existing) {
+            return res.status(400).json({ success: false, message: "You are already copying this trader." });
+        }
+
+        const newBalance = userBalance - numericAmount;
+        await supabase.from("users").update({ balance: newBalance }).eq("id", user_id);
+
+        const { data: copy, error: copyErr } = await supabase
+            .from("copy_trades")
+            .insert([{
+                user_id,
+                trader_name,
+                trader_badge: trader_badge || 'Expert',
+                amount: numericAmount,
+                current_value: numericAmount,
+                last_pnl_update: new Date().toISOString()
+            }])
+            .select()
+            .single();
+
+        if (copyErr) {
+            await supabase.from("users").update({ balance: userBalance }).eq("id", user_id);
+            throw copyErr;
+        }
+
+        await supabase.from("transactions").insert([{
+            user_id,
+            type: "Copy Trade",
+            amount: numericAmount,
+            status: "Approved",
+            description: `Started copying ${trader_name}`
+        }]);
+
+        res.json({ 
+            success: true, 
+            message: `You are now copying ${trader_name} with $${numericAmount.toFixed(2)}.`,
+            copy: copy,
+            new_balance: newBalance
+        });
     } catch (err) {
-        console.error("COPY FOLLOW ERROR:", err);
-        res.status(500).json({ success: false, message: "Failed to follow trader." });
+        console.error("COPY EXECUTE ERROR:", err);
+        res.status(500).json({ success: false, message: "Failed to execute copy trade." });
     }
 });
 
+/* ---- 2. Unfollow (returns current value to balance) ---- */
 app.delete("/copy-trade/unfollow/:trader_name", async (req, res) => {
     try {
         const { user_id } = req.query;
         const traderName = decodeURIComponent(req.params.trader_name);
+        
         if (!user_id) return res.status(400).json({ success: false, message: "User ID is required." });
 
-        const { error } = await supabase.from("copy_trades").delete().eq("user_id", user_id).eq("trader_name", traderName);
-        if (error) throw error;
-        res.json({ success: true, message: `You have unfollowed ${traderName}.` });
+        const { data: copy, error: copyErr } = await supabase
+            .from("copy_trades")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("trader_name", traderName)
+            .single();
+
+        if (copyErr || !copy) {
+            return res.status(404).json({ success: false, message: "Copy trade not found." });
+        }
+
+        const returnAmount = Number(copy.current_value || copy.amount || 0);
+
+        const { data: user } = await supabase
+            .from("users")
+            .select("balance")
+            .eq("id", user_id)
+            .single();
+
+        const newBalance = Number(user.balance || 0) + returnAmount;
+        await supabase.from("users").update({ balance: newBalance }).eq("id", user_id);
+
+        await supabase.from("copy_trades").delete().eq("id", copy.id);
+
+        await supabase.from("transactions").insert([{
+            user_id,
+            type: "Copy Trade",
+            amount: returnAmount,
+            status: "Approved",
+            description: `Stopped copying ${traderName} — returned $${returnAmount.toFixed(2)}`
+        }]);
+
+        const profit = returnAmount - Number(copy.amount || 0);
+
+        res.json({ 
+            success: true, 
+            message: `You stopped copying ${traderName}. $${returnAmount.toFixed(2)} returned to your balance.`,
+            returned: returnAmount,
+            profit: profit,
+            new_balance: newBalance
+        });
     } catch (err) {
+        console.error("COPY UNFOLLOW ERROR:", err);
         res.status(500).json({ success: false, message: "Failed to unfollow trader." });
     }
 });
 
+/* ---- 3. Get user's active copy trades ---- */
 app.get("/copy-trade/mine/:user_id", async (req, res) => {
     try {
-        const { data, error } = await supabase.from("copy_trades").select("*").eq("user_id", req.params.user_id).order("created_at", { ascending: false });
+        const { data, error } = await supabase
+            .from("copy_trades")
+            .select("*")
+            .eq("user_id", req.params.user_id)
+            .order("created_at", { ascending: false });
+
         if (error) throw error;
         res.json({ success: true, trades: data || [] });
     } catch (err) {
         res.status(500).json({ success: false, message: "Failed to load copy trades." });
     }
 });
+
+/* ---- 4. Hourly P&L simulation job ---- */
+setInterval(async () => {
+    try {
+        console.log("⏰ Running hourly P&L simulation...");
+
+        const { data: activeCopies, error } = await supabase
+            .from("copy_trades")
+            .select("id, amount, current_value");
+
+        if (error || !activeCopies || activeCopies.length === 0) {
+            console.log("No active copies to update.");
+            return;
+        }
+
+        for (const copy of activeCopies) {
+            const changePercent = (Math.random() * 4 - 2);
+            const currentValue = Number(copy.current_value || copy.amount);
+            const newValue = Math.max(0, currentValue * (1 + changePercent / 100));
+
+            await supabase
+                .from("copy_trades")
+                .update({ 
+                    current_value: parseFloat(newValue.toFixed(2)),
+                    last_pnl_update: new Date().toISOString()
+                })
+                .eq("id", copy.id);
+        }
+
+        console.log(`✅ Updated ${activeCopies.length} copy trades.`);
+    } catch (err) {
+        console.error("P&L SIMULATION ERROR:", err);
+    }
+}, 60 * 60 * 1000);
 
 /* ---------------- START SERVER ---------------- */
 app.listen(PORT, async () => {

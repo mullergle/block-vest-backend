@@ -170,8 +170,9 @@ app.get("/test", async (req, res) => {
 });
 
 /* ---------------- SIGNUP: SEND CODE ---------------- */
+// ✅ NOW ACCEPTS `language` AND `currency` FROM FRONTEND
 app.post("/signup/send-code", async (req, res) => {
-    const { fullName, phone, country, email, password, referred_by } = req.body;
+    const { fullName, phone, country, email, password, referred_by, language, currency } = req.body;
 
     if (!email) {
         return res.status(400).json({ success: false, message: "Email is required." });
@@ -197,7 +198,10 @@ app.post("/signup/send-code", async (req, res) => {
             password,
             is_verified: false,
             email_verified: false,
-            referred_by: referred_by || null
+            referred_by: referred_by || null,
+            // ✅ Save user's explicit choices — no country-to-currency mapping
+            language: language || 'en',
+            currency: currency || 'USD'
         }]);
 
     if (dbError) {
@@ -301,8 +305,9 @@ app.post("/signup/verify", async (req, res) => {
 });
 
 /* ---------------- SIGNUP (DIRECT) ---------------- */
+// ✅ NOW ACCEPTS `language` AND `currency` FROM FRONTEND
 app.post("/signup", async (req, res) => {
-    const { fullName, phone, country, email, password } = req.body;
+    const { fullName, phone, country, email, password, language, currency } = req.body;
 
     if (!fullName || !phone || !country || !email || !password) {
         return res.status(400).json({ success: false, message: "All fields are required." });
@@ -327,7 +332,10 @@ app.post("/signup", async (req, res) => {
             email, 
             password, 
             is_verified: false,
-            email_verified: true
+            email_verified: true,
+            // ✅ Save user's explicit choices
+            language: language || 'en',
+            currency: currency || 'USD'
         }]) 
         .select();
 
@@ -416,6 +424,7 @@ app.get("/user/:id", async (req, res) => {
         });
     }
 
+    // ✅ `language` and `currency` are automatically included via `...data`
     res.json({
         success: true,
         user: {

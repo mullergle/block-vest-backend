@@ -1940,8 +1940,8 @@ app.delete("/copy-trade/unfollow/:trader_name", async (req, res) => {
         }
 
         const originalAmount = Number(copy.amount || 0);
-        const returnAmount = Number(copy.current =_value || originalAmount || 0);
-        const profit returnAmount - originalAmount;
+        const returnAmount = Number(copy.current_value || originalAmount || 0);
+        const profit = returnAmount - originalAmount;
 
         const { error: txnErr } = await supabase
             .from("transactions")

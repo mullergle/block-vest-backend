@@ -49,18 +49,18 @@ async function sendWelcomeEmail({ to, fullName }) {
     <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:32px 16px;">
         <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
             <div style="background:#08090d;padding:28px 32px;">
-                <h1 style="color:#ffffff;font-size:20px;margin:0;">My Investment</h1>
+                <h1 style="color:#ffffff;font-size:20px;margin:0;">Nexora Trade Markets</h1>
             </div>
             <div style="padding:32px;">
                 <h2 style="color:#08090d;font-size:22px;margin:0 0 16px;">Welcome, ${firstName}!</h2>
                 <p style="color:#5b6473;font-size:15px;line-height:1.6;margin:0 0 16px;">
-                    Thank you for joining <strong>My Investment</strong>. Your email address has been successfully verified, and your account is now fully activated.
+                    Thank you for joining <strong>Nexora Trade Markets</strong>. Your email address has been successfully verified, and your account is now fully activated.
                 </p>
                 <p style="color:#5b6473;font-size:15px;line-height:1.6;margin:0 0 16px;">
                     You can now access your dashboard to manage deposits, track withdrawals, monitor your portfolio, and communicate securely with our support team.
                 </p>
                 <div style="text-align:center;margin:28px 0;">
-                    <a href="https://myinvestments.cfd" style="background:#ff3b5c;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;display:inline-block;">
+                    <a href="https://nexoratrademarkets.cfd" style="background:#ff3b5c;color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;display:inline-block;">
                         Go to Dashboard
                     </a>
                 </div>
@@ -69,7 +69,7 @@ async function sendWelcomeEmail({ to, fullName }) {
                 </p>
                 <p style="color:#5b6473;font-size:15px;line-height:1.6;margin:0;">
                     Welcome aboard,<br/>
-                    <strong>The My Investment Team</strong>
+                    <strong>The Nexora Trade Markets Team</strong>
                 </p>
             </div>
             <div style="background:#f3f4f6;padding:16px 32px;text-align:center;">
@@ -82,9 +82,9 @@ async function sendWelcomeEmail({ to, fullName }) {
 
     try {
         const { error } = await resend.emails.send({
-            from: "My Investment <noreply@myinvestments.cfd>",
+            from: "Nexora Trade Markets <noreply@nexoratrademarkets.cfd>",
             to,
-            subject: "Welcome to My Investment — Your Account Is Verified",
+            subject: "Welcome to Nexora Trade Markets — Your Account Is Verified",
             html
         });
 
@@ -102,7 +102,7 @@ async function sendNotificationEmail({ to, fullName, title, message, amount = nu
     <div style="font-family:Arial,sans-serif;background:#f9fafb;padding:32px 16px;">
         <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
             <div style="background:#08090d;padding:28px 32px;">
-                <h1 style="color:#ffffff;font-size:20px;margin:0;">My Investment</h1>
+                <h1 style="color:#ffffff;font-size:20px;margin:0;">Nexora Trade Markets</h1>
             </div>
             <div style="padding:32px;">
                 <h2 style="color:#08090d;font-size:22px;margin:0 0 16px;">${title}</h2>
@@ -122,13 +122,13 @@ async function sendNotificationEmail({ to, fullName, title, message, amount = nu
                 ` : ''}
 
                 <div style="text-align:center;margin:28px 0;">
-                    <a href="https://myinvestments.cfd" style="background:${accentColor};color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;display:inline-block;">
+                    <a href="https://nexoratrademarkets.cfd" style="background:${accentColor};color:#ffffff;text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600;font-size:15px;display:inline-block;">
                         Go to Dashboard
                     </a>
                 </div>
                 <p style="color:#5b6473;font-size:15px;line-height:1.6;margin:0;">
                     Best regards,<br/>
-                    <strong>The My Investment Team</strong>
+                    <strong>The Nexora Trade Markets Team</strong>
                 </p>
             </div>
             <div style="background:#f3f4f6;padding:16px 32px;text-align:center;">
@@ -141,7 +141,7 @@ async function sendNotificationEmail({ to, fullName, title, message, amount = nu
 
     try {
         const { error } = await resend.emails.send({
-            from: "My Investment <noreply@myinvestments.cfd>",
+            from: "Nexora Trade Markets <noreply@nexoratrademarkets.cfd>",
             to,
             subject: title,
             html
@@ -170,7 +170,6 @@ app.get("/test", async (req, res) => {
 });
 
 /* ---------------- SIGNUP: SEND CODE ---------------- */
-// ✅ NOW ACCEPTS `language` AND `currency` FROM FRONTEND
 app.post("/signup/send-code", async (req, res) => {
     const { fullName, phone, country, email, password, referred_by, language, currency } = req.body;
 
@@ -199,7 +198,6 @@ app.post("/signup/send-code", async (req, res) => {
             is_verified: false,
             email_verified: false,
             referred_by: referred_by || null,
-            // ✅ Save user's explicit choices — no country-to-currency mapping
             language: language || 'en',
             currency: currency || 'USD'
         }]);
@@ -220,11 +218,11 @@ app.post("/signup/send-code", async (req, res) => {
 
     try {
         const { data, error } = await resend.emails.send({
-            from: "My Investment <noreply@myinvestments.cfd>",
+            from: "Nexora Trade Markets <noreply@nexoratrademarkets.cfd>",
             to: email,
-            subject: "Verify your My Investment account",
+            subject: "Verify your Nexora Trade Markets account",
             html: `
-                <h2>Welcome to My Investment</h2>
+                <h2>Welcome to Nexora Trade Markets</h2>
                 <p>Your verification code is:</p>
                 <h1>${code}</h1>
                 <p>This code expires in 10 minutes.</p>
@@ -305,7 +303,6 @@ app.post("/signup/verify", async (req, res) => {
 });
 
 /* ---------------- SIGNUP (DIRECT) ---------------- */
-// ✅ NOW ACCEPTS `language` AND `currency` FROM FRONTEND
 app.post("/signup", async (req, res) => {
     const { fullName, phone, country, email, password, language, currency } = req.body;
 
@@ -333,7 +330,6 @@ app.post("/signup", async (req, res) => {
             password, 
             is_verified: false,
             email_verified: true,
-            // ✅ Save user's explicit choices
             language: language || 'en',
             currency: currency || 'USD'
         }]) 
@@ -395,7 +391,6 @@ app.get("/user/:id", async (req, res) => {
         return res.status(404).json({ success: false, message: "User not found." });
     }
 
-    // ✅ GENERATE A CLEAN REFERRAL CODE IF MISSING
     let refCode = data.referral_code;
     if (!refCode) {
         refCode = String(data.id).split('-')[0].toUpperCase();
@@ -424,7 +419,6 @@ app.get("/user/:id", async (req, res) => {
         });
     }
 
-    // ✅ `language` and `currency` are automatically included via `...data`
     res.json({
         success: true,
         user: {
@@ -479,11 +473,11 @@ app.post("/forgot-password", async (req, res) => {
 
     try {
         const { data, error } = await resend.emails.send({
-            from: "My Investment <noreply@myinvestments.cfd>",
+            from: "Nexora Trade Markets <noreply@nexoratrademarkets.cfd>",
             to: email,
-            subject: "My Investment Password Reset Code",
+            subject: "Nexora Trade Markets Password Reset Code",
             html: `
-                <h2>My Investment Verification</h2>
+                <h2>Nexora Trade Markets Verification</h2>
                 <p>Your verification code is:</p>
                 <h1>${code}</h1>
                 <p>This code expires in 10 minutes.</p>
@@ -609,7 +603,6 @@ app.post("/withdraw/send-code", async (req, res) => {
         return res.status(400).json({ success: false, message: "Email is required." });
     }
 
-    // ✅ KYC Check: Block unverified users from requesting a withdrawal code
     if (user_id) {
         const { data: user } = await supabase
             .from("users")
@@ -640,9 +633,9 @@ app.post("/withdraw/send-code", async (req, res) => {
 
     try {
         const { data, error } = await resend.emails.send({
-            from: "My Investment <noreply@myinvestments.cfd>",
+            from: "Nexora Trade Markets <noreply@nexoratrademarkets.cfd>",
             to: email,
-            subject: "My Investment Withdrawal Verification",
+            subject: "Nexora Trade Markets Withdrawal Verification",
             html: `
                 <h2>Withdrawal Verification</h2>
                 <p>Your withdrawal verification code is:</p>
@@ -675,7 +668,6 @@ app.post("/withdraw/create", async (req, res) => {
         return res.status(400).json({ success: false, message: "Invalid withdrawal amount." });
     }
 
-    // ✅ KYC Check: Block unverified users from creating withdrawals
     const { data: userCheck, error: userCheckErr } = await supabase
         .from("users")
         .select("is_verified, balance")
@@ -878,7 +870,7 @@ app.put("/admin/user/:id", async (req, res) => {
                 type: isCredit ? "Deposit" : "Withdrawal",
                 amount: absoluteAmount,
                 status: "Approved",
-                description: isCredit ? "Credit by My Investment" : "Account adjustment by My Investment"
+                description: isCredit ? "Credit by Nexora Trade Markets" : "Account adjustment by Nexora Trade Markets"
             }]);
         if (txnError) console.log("Transaction log error:", txnError);
     }
@@ -1174,7 +1166,6 @@ app.put("/admin/deposits/:id/approve", async (req, res) => {
 
     /* ============================================================ */
     /* ✅ REFERRAL BONUS LOGIC                                       */
-    /* If the depositor was referred by someone, pay the referrer $20 */
     /* ============================================================ */
     try {
         const { data: depositor } = await supabase
@@ -1194,13 +1185,11 @@ app.put("/admin/deposits/:id/approve", async (req, res) => {
                 const REFERRAL_BONUS = 20.00;
                 const newReferrerBalance = Number(referrer.balance || 0) + REFERRAL_BONUS;
 
-                // 1) Credit the referrer's balance
                 await supabase
                     .from("users")
                     .update({ balance: newReferrerBalance })
                     .eq("id", referrer.id);
 
-                // 2) Log the transaction so it shows on the referral page
                 await supabase.from("transactions").insert([{
                     user_id: referrer.id,
                     type: "Referral Bonus",
@@ -1209,13 +1198,11 @@ app.put("/admin/deposits/:id/approve", async (req, res) => {
                     description: `$${REFERRAL_BONUS.toFixed(2)} bonus for referring ${depositor.full_name || "a user"}`
                 }]);
 
-                // 3) Mark the depositor so they can't trigger this again
                 await supabase
                     .from("users")
                     .update({ referral_bonus_paid: true })
                     .eq("id", depositor.id);
 
-                // 4) Notify the referrer via email
                 if (referrer.email) {
                     await sendNotificationEmail({
                         to: referrer.email,
@@ -1234,7 +1221,6 @@ app.put("/admin/deposits/:id/approve", async (req, res) => {
             }
         }
     } catch (refErr) {
-        // Never let referral bonus failure break the deposit approval
         console.error("❌ Referral bonus error:", refErr);
     }
 
@@ -1722,14 +1708,14 @@ app.post("/admin/support/messages", async (req, res) => {
 
             if (user && user.email) {
                 await resend.emails.send({
-                    from: "My Investment Support <support@myinvestments.cfd>",
+                    from: "Nexora Trade Markets Support <support@nexoratrademarkets.cfd>",
                     to: user.email,
-                    subject: "You have a new message from My Investment Support",
+                    subject: "You have a new message from Nexora Trade Markets Support",
                     html: `
                         <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;background:#f9fafb;">
                             <div style="background:#fff;border-radius:12px;padding:32px;">
                                 <h2 style="color:#08090d;margin:0 0 8px;">Hi ${(user.full_name || "there").split(" ")[0]},</h2>
-                                <p style="color:#5b6473;">You have a new message from My Investment Support:</p>
+                                <p style="color:#5b6473;">You have a new message from Nexora Trade Markets Support:</p>
                                 <div style="background:#f3f4f6;border-left:3px solid #ff3b5c;padding:16px;border-radius:8px;">
                                     <p style="color:#08090d;margin:0;white-space:pre-wrap;">${message}</p>
                                 </div>
@@ -1839,7 +1825,6 @@ app.post("/trade", async (req, res) => {
 /* ============= COPY TRADING WITH P&L SIMULATION ================= */
 /* ================================================================ */
 
-/* ---- 1. Execute a copy trade (deducts money, creates position) ---- */
 app.post("/copy-trade/execute", async (req, res) => {
     try {
         const { user_id, trader_name, trader_badge, amount } = req.body;
@@ -1882,8 +1867,6 @@ app.post("/copy-trade/execute", async (req, res) => {
             return res.status(400).json({ success: false, message: "You are already copying this trader." });
         }
 
-        // ✅ FIX: Insert the debit transaction FIRST, before deducting balance.
-        // If it fails, nothing is changed. This keeps the ledger consistent.
         const { data: txnData, error: txnErr } = await supabase
             .from("transactions")
             .insert([{
@@ -1899,7 +1882,7 @@ app.post("/copy-trade/execute", async (req, res) => {
             console.error("❌ Copy Out txn insert failed:", txnErr);
             return res.status(500).json({
                 success: false,
-                message: "Failed to log the copy trade. Please check the transactions table schema (type/status enums must include 'Copy Out' and 'Approved')."
+                message: "Failed to log the copy trade. Please check the transactions table schema."
             });
         }
 
@@ -1920,7 +1903,6 @@ app.post("/copy-trade/execute", async (req, res) => {
             .single();
 
         if (copyErr) {
-            // Roll back the transaction and balance
             await supabase.from("transactions").delete().eq("id", txnData[0].id);
             await supabase.from("users").update({ balance: userBalance }).eq("id", user_id);
             console.error("❌ Copy trade insert failed:", copyErr);
@@ -1939,12 +1921,6 @@ app.post("/copy-trade/execute", async (req, res) => {
     }
 });
 
-/* ---- 2. Unfollow (returns current value to balance) ---- */
-// ✅ FIXES APPLIED:
-//   1. Insert the refund transaction FIRST and check the error before touching balance/copy_trades.
-//   2. Only delete the copy_trade after the refund txn is confirmed.
-//   3. Return the original amount and the actual refunded amount in the response so the client
-//      can display both, and log the profit/loss in the description.
 app.delete("/copy-trade/unfollow/:trader_name", async (req, res) => {
     try {
         const { user_id } = req.query;
@@ -1964,10 +1940,9 @@ app.delete("/copy-trade/unfollow/:trader_name", async (req, res) => {
         }
 
         const originalAmount = Number(copy.amount || 0);
-        const returnAmount = Number(copy.current_value || originalAmount || 0);
-        const profit = returnAmount - originalAmount;
+        const returnAmount = Number(copy.current =_value || originalAmount || 0);
+        const profit returnAmount - originalAmount;
 
-        // ✅ FIX #1: Write the refund txn FIRST. If this fails, do not proceed.
         const { error: txnErr } = await supabase
             .from("transactions")
             .insert([{
@@ -1982,7 +1957,7 @@ app.delete("/copy-trade/unfollow/:trader_name", async (req, res) => {
             console.error("❌ Refund txn insert failed:", txnErr);
             return res.status(500).json({
                 success: false,
-                message: "Could not log the refund. Please ensure the 'transactions' table 'type' enum includes 'Copy In' and 'status' includes 'Approved'."
+                message: "Could not log the refund."
             });
         }
 
@@ -1995,11 +1970,8 @@ app.delete("/copy-trade/unfollow/:trader_name", async (req, res) => {
         const newBalance = Number(user.balance || 0) + returnAmount;
         await supabase.from("users").update({ balance: newBalance }).eq("id", user_id);
 
-        // ✅ FIX #2: Only delete the copy trade after the refund was written.
         const { error: delErr } = await supabase.from("copy_trades").delete().eq("id", copy.id);
         if (delErr) {
-            // The refund already went through; log loudly but don't fail the request,
-            // otherwise the client will retry and double-refund.
             console.error("⚠️ Refund succeeded but copy_trade delete failed:", delErr);
         }
 
@@ -2017,7 +1989,6 @@ app.delete("/copy-trade/unfollow/:trader_name", async (req, res) => {
     }
 });
 
-/* ---- 3. Get user's active copy trades ---- */
 app.get("/copy-trade/mine/:user_id", async (req, res) => {
     try {
         const { data, error } = await supabase
@@ -2033,7 +2004,6 @@ app.get("/copy-trade/mine/:user_id", async (req, res) => {
     }
 });
 
-/* ---- 4. Hourly P&L simulation job ---- */
 setInterval(async () => {
     try {
         console.log("⏰ Running hourly P&L simulation...");

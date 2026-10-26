@@ -1163,6 +1163,72 @@ app.put("/admin/deposits/:id/approve", async (req, res) => {
         await supabase.from("transactions").update({ status: "Approved" }).eq("id", deposit.transaction_id);
     }
 
+    /* ============================================================ */
+    /* ✅ REFERRAL BONUS LOGIC                                       */
+    /* If the depositor was referred by someone, pay the referrer $20 */
+    /* ============================================================ */
+    try {
+        const { data: depositor } = await supabase
+            .from("users")
+            .select("id, full_name, referred_by, referral_bonus_paid")
+            .eq("id", deposit.user_id)
+            .single();
+
+        if (depositor && depositor.referred_by && !depositor.referral_bonus_paid) {
+            const { data: referrer } = await supabase
+                .from("users")
+                .select("id, full_name, email, balance")
+                .eq("referral_code", depositor.referred_by)
+                .single();
+
+            if (referrer) {
+                const REFERRAL_BONUS = 20.00;
+                const newReferrerBalance = Number(referrer.balance || 0) + REFERRAL_BONUS;
+
+                // 1) Credit the referrer's balance
+                await supabase
+                    .from("users")
+                    .update({ balance: newReferrerBalance })
+                    .eq("id", referrer.id);
+
+                // 2) Log the transaction so it shows on the referral page
+                await supabase.from("transactions").insert([{
+                    user_id: referrer.id,
+                    type: "Referral Bonus",
+                    amount: REFERRAL_BONUS,
+                    status: "Approved",
+                    description: `$${REFERRAL_BONUS.toFixed(2)} bonus for referring ${depositor.full_name || "a user"}`
+                }]);
+
+                // 3) Mark the depositor so they can't trigger this again
+                await supabase
+                    .from("users")
+                    .update({ referral_bonus_paid: true })
+                    .eq("id", depositor.id);
+
+                // 4) Notify the referrer via email
+                if (referrer.email) {
+                    await sendNotificationEmail({
+                        to: referrer.email,
+                        fullName: referrer.full_name,
+                        title: "Referral Bonus Earned",
+                        message: `Great news! Someone you referred just made their first deposit. You've earned a $${REFERRAL_BONUS.toFixed(2)} referral bonus.`,
+                        amount: REFERRAL_BONUS,
+                        status: "Approved",
+                        isError: false
+                    });
+                }
+
+                console.log(`✅ Paid $${REFERRAL_BONUS} referral bonus to ${referrer.full_name}`);
+            } else {
+                console.log(`⚠️ Could not find referrer with code "${depositor.referred_by}"`);
+            }
+        }
+    } catch (refErr) {
+        // Never let referral bonus failure break the deposit approval
+        console.error("❌ Referral bonus error:", refErr);
+    }
+
     if (user && user.email) {
         await sendNotificationEmail({
             to: user.email,
